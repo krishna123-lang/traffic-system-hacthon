@@ -30,6 +30,13 @@ interface CongestionMarkerData {
   isIncident: boolean;
 }
 
+interface CongestionSegmentOverlay {
+  segment_id: string;
+  congestion_score: number;
+  startFrac: number;  // 0..1 fraction along route
+  endFrac: number;
+}
+
 interface Props {
   network?: NetworkData;
   onSegmentClick?: (segmentId: string) => void;
@@ -37,6 +44,7 @@ interface Props {
   height?: string;
   routeCoordinates?: [number, number][];  // Real road-following coords [lon,lat][]
   congestionMarkers?: CongestionMarkerData[];
+  congestionSegments?: CongestionSegmentOverlay[];  // colored overlays on route
   sourceNodeId?: string;
   targetNodeId?: string;
   isAnimating?: boolean;
@@ -50,6 +58,7 @@ export function NetworkMap({
   height = 'h-full',
   routeCoordinates,
   congestionMarkers,
+  congestionSegments,
   sourceNodeId,
   targetNodeId,
   isAnimating = false,
@@ -156,6 +165,117 @@ export function NetworkMap({
       map.once('load', drawRoute);
     }
   }, [routeCoordinates]);
+
+  // Draw congestion overlays on the route (colored sections)
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+
+    const drawCongestion = () => {
+      // Remove old congestion overlay layers
+      const existingLayers = map.getStyle()?.layers || [];
+      existingLayers.forEach(l => {
+        if (l.id.startsWith('congestion-seg-')) {
+          map.removeLayer(l.id);
+        }
+      });
+      // Remove old sources  
+      if (map.getSource('congestion-overlay')) map.removeSource('congestion-overlay');
+
+      if (!congestionSegments?.length || !routeCoordinates || routeCoordinates.length < 2) return;
+
+      // Build features: each congestion segment is a sub-linestring of the route
+      const features: GeoJSON.Feature[] = [];
+
+      congestionSegments.forEach((cs, idx) => {
+        const startIdx = Math.floor(cs.startFrac * (routeCoordinates.length - 1));
+        const endIdx = Math.ceil(cs.endFrac * (routeCoordinates.length - 1));
+        const coords = routeCoordinates.slice(
+          Math.max(0, startIdx),
+          Math.min(routeCoordinates.length, endIdx + 1)
+        );
+        if (coords.length < 2) return;
+
+        // Color by severity
+        let color = '#eab308'; // yellow - mild
+        if (cs.congestion_score > 0.5) color = '#ef4444';      // red - severe
+        else if (cs.congestion_score > 0.3) color = '#f97316';  // orange - moderate
+        else if (cs.congestion_score > 0.15) color = '#eab308'; // yellow - mild
+
+        features.push({
+          type: 'Feature',
+          properties: {
+            segment_id: cs.segment_id,
+            congestion_score: cs.congestion_score,
+            color,
+            index: idx,
+          },
+          geometry: {
+            type: 'LineString',
+            coordinates: coords,
+          },
+        });
+      });
+
+      if (!features.length) return;
+
+      map.addSource('congestion-overlay', {
+        type: 'geojson',
+        data: { type: 'FeatureCollection', features },
+      });
+
+      // Congestion glow (outer)
+      map.addLayer({
+        id: 'congestion-seg-glow',
+        type: 'line',
+        source: 'congestion-overlay',
+        layout: { 'line-join': 'round', 'line-cap': 'round' },
+        paint: {
+          'line-color': ['get', 'color'] as any,
+          'line-width': 16,
+          'line-opacity': 0.3,
+          'line-blur': 5,
+        },
+      });
+
+      // Congestion line (on top of route)
+      map.addLayer({
+        id: 'congestion-seg-line',
+        type: 'line',
+        source: 'congestion-overlay',
+        layout: { 'line-join': 'round', 'line-cap': 'round' },
+        paint: {
+          'line-color': ['get', 'color'] as any,
+          'line-width': 7,
+          'line-opacity': 0.85,
+        },
+      });
+
+      // Hover popup for congestion segments
+      map.on('mousemove', 'congestion-seg-line', (e) => {
+        map.getCanvas().style.cursor = 'pointer';
+        const feat = e.features?.[0];
+        if (!feat) return;
+        const props = feat.properties;
+        popupRef.current?.setLngLat(e.lngLat).setHTML(
+          `<div style="padding:4px 8px;font-size:12px">
+            <strong style="color:${props.color}">\u26A0 ${props.segment_id}</strong>
+            <br/>Congestion: ${(Number(props.congestion_score) * 100).toFixed(1)}%
+          </div>`
+        ).addTo(map);
+      });
+      map.on('mouseleave', 'congestion-seg-line', () => {
+        map.getCanvas().style.cursor = '';
+        popupRef.current?.remove();
+      });
+    };
+
+    if (map.isStyleLoaded()) {
+      drawCongestion();
+    } else {
+      map.once('load', drawCongestion);
+    }
+  }, [congestionSegments, routeCoordinates]);
 
   // Source and destination markers
   useEffect(() => {

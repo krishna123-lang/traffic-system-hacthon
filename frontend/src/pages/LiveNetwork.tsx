@@ -111,9 +111,7 @@ export default function LiveNetwork() {
     };
 
     return currentRoute.congestion_points.map(cp => {
-      // Find segment index in the route
       const segIdx = segments.indexOf(cp.segment_id);
-      // Place marker at the midpoint of this segment along the route
       const frac = segIdx >= 0 ? (segIdx + 0.5) / segments.length : 0.5;
       const [lon, lat] = getPositionAtFraction(frac);
       
@@ -125,6 +123,29 @@ export default function LiveNetwork() {
         isIncident: incidentSegs.has(cp.segment_id),
       };
     });
+  })();
+
+  // Build congestion segment overlays — colored sections ON the route line
+  const congestionSegments = (() => {
+    if (!currentRoute?.segment_congestion?.length || !routeCoords?.length || !currentRoute?.segments?.length) return [];
+    
+    const segments = currentRoute.segments;
+    const totalSegs = segments.length;
+    
+    // Show ALL segments that have above-threshold congestion as colored overlays
+    return currentRoute.segment_congestion
+      .filter(sc => sc.congestion_score > 0.1)  // show any with >10% congestion
+      .map(sc => {
+        const segIdx = segments.indexOf(sc.segment_id);
+        if (segIdx < 0) return null;
+        return {
+          segment_id: sc.segment_id,
+          congestion_score: sc.congestion_score,
+          startFrac: segIdx / totalSegs,
+          endFrac: (segIdx + 1) / totalSegs,
+        };
+      })
+      .filter(Boolean) as { segment_id: string; congestion_score: number; startFrac: number; endFrac: number }[];
   })();
 
   // Build intervention overlay from selected solution
@@ -207,6 +228,7 @@ export default function LiveNetwork() {
             height="h-full"
             routeCoordinates={routeCoords}
             congestionMarkers={congestionMarkers}
+            congestionSegments={congestionSegments}
             sourceNodeId={analysis ? sourceNode : undefined}
             targetNodeId={analysis ? targetNode : undefined}
             isAnimating={isAnimating && !!routeCoords}
