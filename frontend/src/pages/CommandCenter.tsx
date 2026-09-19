@@ -107,13 +107,9 @@ export default function CommandCenter() {
           ) : (
             <NetworkMap
               network={network}
-              segmentStates={segmentStates}
-              incidentSegment={incidentActive ? incidentSegment : null}
-              propagationSegments={propagationSegments}
               onSegmentClick={setSelectedSegment}
               selectedSegmentId={selectedSegment}
               height="h-full"
-              showIncidentMarker={incidentActive}
             />
           )}
         </div>

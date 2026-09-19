@@ -12,13 +12,14 @@ from pathlib import Path
 ROOT = Path(__file__).parent.parent.parent.parent
 sys.path.insert(0, str(ROOT))
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Body
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from datetime import datetime, timezone
 import numpy as np
 import pandas as pd
 from typing import Optional, List, Dict, Any
+import aiohttp
 
 from backend.app.config import settings
 from backend.app.services.state import app_state
@@ -777,6 +778,59 @@ def _cong_label(score: float) -> str:
     elif score >= 0.4: return "moderate"
     elif score >= 0.2: return "low_risk"
     return "normal"
+
+
+@app.post("/api/route/geometry")
+async def get_route_geometry(req: dict = Body(...)):
+    """Get real road-following geometry for a route using OSRM."""
+    node_ids = req.get("node_ids", [])  # list of node IDs in order
+    if len(node_ids) < 2:
+        return {"coordinates": [], "error": "Need at least 2 nodes"}
+    
+    nodes_df = app_state.nodes_df
+    if nodes_df is None:
+        return {"coordinates": [], "error": "No node data"}
+    
+    # Get lat/lon for each node
+    waypoints = []
+    for nid in node_ids:
+        row = nodes_df[nodes_df["node_id"] == nid]
+        if len(row) > 0:
+            waypoints.append((float(row.iloc[0]["lon"]), float(row.iloc[0]["lat"])))
+    
+    if len(waypoints) < 2:
+        return {"coordinates": [], "error": "Could not resolve nodes"}
+    
+    # Build OSRM request - use up to 25 waypoints (OSRM limit)
+    # Sample evenly if too many
+    if len(waypoints) > 25:
+        step = len(waypoints) / 24
+        sampled = [waypoints[0]]
+        for i in range(1, 24):
+            sampled.append(waypoints[int(i * step)])
+        sampled.append(waypoints[-1])
+        waypoints = sampled
+    
+    coords_str = ";".join([f"{lon},{lat}" for lon, lat in waypoints])
+    url = f"https://router.project-osrm.org/route/v1/driving/{coords_str}?overview=full&geometries=geojson"
+    
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    if data.get("routes"):
+                        coords = data["routes"][0]["geometry"]["coordinates"]
+                        return {
+                            "coordinates": coords,  # [[lon, lat], ...]
+                            "distance_m": data["routes"][0].get("distance", 0),
+                            "duration_s": data["routes"][0].get("duration", 0)
+                        }
+    except Exception as e:
+        pass
+    
+    # Fallback: return straight-line coordinates
+    return {"coordinates": waypoints, "fallback": True}
 
 
 from pydantic import BaseModel

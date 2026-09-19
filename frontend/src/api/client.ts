@@ -438,6 +438,20 @@ export interface JourneyRoute extends Route {
   forecast_accuracy: Record<string, number>;
 }
 
+export interface CongestionAnalysisItem {
+  segment_id: string;
+  congestion_score: number;
+  cause: string;
+  reason: string;
+  has_incident: boolean;
+  incident: any;
+  speed_kmh: number;
+  flow_vph: number;
+  capacity_vph: number;
+  lanes: number;
+  road_type: string;
+}
+
 export interface JourneyAnalysis {
   source_node: string;
   target_node: string;
@@ -445,6 +459,7 @@ export interface JourneyAnalysis {
   routes: JourneyRoute[];
   diversions: DiversionOption[];
   solutions: Solution[];
+  congestion_analysis: CongestionAnalysisItem[];
   xai_summary: {
     congestion_cause: string;
     incident_explanation: string;
@@ -458,3 +473,13 @@ export const fetchJourneyAnalysis = (source: string, target: string, time: strin
     target_node: target,
     departure_time: time,
   }).then(r => r.data);
+
+export interface RouteGeometry {
+  coordinates: [number, number][];
+  distance_m?: number;
+  duration_s?: number;
+  fallback?: boolean;
+}
+
+export const fetchRouteGeometry = (nodeIds: string[]) =>
+  api.post<RouteGeometry>('/api/route/geometry', { node_ids: nodeIds }).then(r => r.data);

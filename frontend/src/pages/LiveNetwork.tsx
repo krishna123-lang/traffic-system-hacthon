@@ -1,6 +1,6 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useMutation } from '@tanstack/react-query';
-import { fetchJourneyAnalysis } from '../api/client';
+import { fetchJourneyAnalysis, fetchRouteGeometry } from '../api/client';
 import { useNetwork } from '../hooks/useNetwork';
 import { NetworkMap } from '../components/NetworkMap';
 import { SegmentDrawer } from '../components/SegmentDrawer';
@@ -8,7 +8,7 @@ import { useJourneyStore } from '../stores/journeyStore';
 import {
   Navigation, MapPin, Clock, AlertTriangle, Zap, Info, CheckCircle,
   TrendingDown, TrendingUp, Minus, Layers, TrafficCone, Landmark, 
-  ArrowRightLeft, PaintBucket, Radio
+  ArrowRightLeft, PaintBucket, Radio, Eye, EyeOff
 } from 'lucide-react';
 import clsx from 'clsx';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 'recharts';
@@ -24,13 +24,16 @@ const INTERVENTION_ICONS: Record<string, typeof Zap> = {
 
 export default function LiveNetwork() {
   const [selectedSegment, setSelectedSegment] = useState<string | null>(null);
+  const [routeCoords, setRouteCoords] = useState<[number, number][] | undefined>();
+  const [isAnimating, setIsAnimating] = useState(true);
   
   const {
     sourceNode, targetNode, departureTime,
     analysis, activeTab, isAnalyzing,
     setSource, setTarget, setDepartureTime,
     setAnalysis, setActiveTab, setAnalyzing, reset,
-    selectedRoute, setSelectedRoute, hasIncidents, hasCongestion
+    selectedRoute, setSelectedRoute, hasIncidents, hasCongestion,
+    selectedSolutionIdx, setSelectedSolution,
   } = useJourneyStore();
 
   const { data: network } = useNetwork();
@@ -49,25 +52,63 @@ export default function LiveNetwork() {
 
   const nodes = network?.nodes ?? [];
   const currentRoute = selectedRoute();
-  
-  // Prepare data for NetworkMap
-  const segmentCongestionMap = new Map<string, {congestion_score: number, congestion_state: string}>();
-  if (currentRoute) {
-    currentRoute.segment_congestion?.forEach(sc => {
-      segmentCongestionMap.set(sc.segment_id, {
-        congestion_score: sc.congestion_score,
-        congestion_state: sc.congestion_state
-      });
-    });
-  }
+  const congestionAnalysis = analysis?.congestion_analysis ?? [];
 
+  // Fetch real road geometry when route changes
+  useEffect(() => {
+    if (!currentRoute?.path || currentRoute.path.length < 2) {
+      setRouteCoords(undefined);
+      return;
+    }
+
+    let cancelled = false;
+    fetchRouteGeometry(currentRoute.path)
+      .then(geo => {
+        if (!cancelled && geo.coordinates?.length >= 2) {
+          setRouteCoords(geo.coordinates as [number, number][]);
+        }
+      })
+      .catch(() => {
+        // Fallback: use node coordinates directly
+        if (cancelled) return;
+        const nodeMap = new Map(nodes.map(n => [n.node_id, n]));
+        const fallbackCoords = currentRoute.path
+          .map(nid => nodeMap.get(nid))
+          .filter(Boolean)
+          .map(n => [n!.lon, n!.lat] as [number, number]);
+        if (fallbackCoords.length >= 2) setRouteCoords(fallbackCoords);
+      });
+
+    return () => { cancelled = true; };
+  }, [currentRoute?.path?.join(','), nodes.length]);
+
+  // Clear route coords on reset
+  useEffect(() => {
+    if (!analysis) {
+      setRouteCoords(undefined);
+      setIsAnimating(true);
+    }
+  }, [analysis]);
+
+  // Build congestion points for map
   const congestionPoints = currentRoute?.congestion_points?.map(cp => ({
     segment_id: cp.segment_id,
     congestion_score: cp.congestion_score
   }));
 
-  const activeIncidents = currentRoute?.incidents_on_route ?? [];
-  const congestionAnalysis = (analysis as any)?.congestion_analysis ?? [];
+  const incidentSegments = currentRoute?.incidents_on_route?.map(i => i.segment_id) ?? [];
+
+  // Build intervention overlay from selected solution
+  const interventionOverlay = (() => {
+    if (selectedSolutionIdx === null || !analysis?.solutions) return null;
+    const sol = analysis.solutions[selectedSolutionIdx] as any;
+    if (!sol) return null;
+    return {
+      type: sol.type || 'capacity_upgrade',
+      segments: sol.affected_segments || [],
+      label: sol.action || 'Intervention',
+    };
+  })();
 
   return (
     <div className="flex flex-col h-full overflow-hidden relative">
@@ -130,20 +171,35 @@ export default function LiveNetwork() {
       <div className="flex flex-1 pt-24 h-full">
         {/* Left column - Map */}
         <div className={clsx('relative transition-all duration-300', analysis ? 'w-[60%]' : 'w-full')}>
-          {network ? (
-            <NetworkMap
-              network={network}
-              onSegmentClick={setSelectedSegment}
-              selectedSegmentId={selectedSegment}
-              height="h-full"
-              highlightSegments={currentRoute?.segments}
-              segmentCongestionMap={segmentCongestionMap}
-              congestionPoints={congestionPoints}
-              showIncidentMarker={activeIncidents.length > 0}
-              incidentSegment={activeIncidents[0]?.segment_id ?? null}
-            />
-          ) : (
-            <div className="skeleton h-full w-full" />
+          <NetworkMap
+            network={network}
+            onSegmentClick={setSelectedSegment}
+            selectedSegmentId={selectedSegment}
+            height="h-full"
+            routeCoordinates={routeCoords}
+            congestionPoints={congestionPoints}
+            incidentSegments={incidentSegments}
+            sourceNodeId={analysis ? sourceNode : undefined}
+            targetNodeId={analysis ? targetNode : undefined}
+            isAnimating={isAnimating && !!routeCoords}
+            interventionOverlay={interventionOverlay}
+          />
+          {/* Animation toggle */}
+          {routeCoords && (
+            <div className="absolute bottom-4 left-4 z-10">
+              <button
+                onClick={() => setIsAnimating(a => !a)}
+                className={clsx(
+                  'flex items-center gap-2 px-4 py-2 rounded-full text-sm font-medium shadow-lg transition-all',
+                  isAnimating
+                    ? 'bg-indigo-600 text-white hover:bg-indigo-700'
+                    : 'bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 border border-gray-200 dark:border-gray-600'
+                )}
+              >
+                {isAnimating ? <Eye className="w-4 h-4" /> : <EyeOff className="w-4 h-4" />}
+                {isAnimating ? 'Vehicle Moving' : 'Vehicle Paused'}
+              </button>
+            </div>
           )}
         </div>
 
@@ -229,7 +285,7 @@ export default function LiveNetwork() {
                   <div className="mt-4 p-3 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800">
                     <p className="text-xs text-gray-500 mb-2">Path</p>
                     <p className="text-xs font-mono text-gray-600 dark:text-gray-400 leading-relaxed">
-                      {currentRoute?.path?.join(' -> ')}
+                      {currentRoute?.path?.join(' \u2192 ')}
                     </p>
                   </div>
                 </>
@@ -298,7 +354,7 @@ export default function LiveNetwork() {
                 </>
               )}
 
-              {/* Tab 3: Incidents — Per congestion point */}
+              {/* Tab 3: Incidents */}
               {activeTab === 'incidents' && currentRoute && (
                 <>
                   <div className="mb-4">
@@ -307,7 +363,6 @@ export default function LiveNetwork() {
                     </p>
                   </div>
                   
-                  {/* Per-congestion-point incident analysis */}
                   {congestionAnalysis.length > 0 ? (
                     <div className="space-y-4">
                       <h3 className="text-sm font-bold flex items-center gap-2">
@@ -322,20 +377,18 @@ export default function LiveNetwork() {
                             : 'border-amber-200 dark:border-amber-900/50 bg-amber-50 dark:bg-amber-900/20'
                         )}>
                           <div className="flex justify-between items-start mb-2">
-                            <div>
-                              <span className={clsx(
-                                'inline-flex items-center gap-1 text-xs font-bold uppercase tracking-wide px-2 py-1 rounded',
-                                ca.has_incident
-                                  ? 'text-red-600 dark:text-red-400 bg-red-100 dark:bg-red-900/50'
-                                  : 'text-amber-600 dark:text-amber-400 bg-amber-100 dark:bg-amber-900/50'
-                              )}>
-                                {ca.has_incident ? <AlertTriangle className="w-3 h-3" /> : <TrafficCone className="w-3 h-3" />}
-                                {ca.has_incident ? 'Incident' : 'Congestion'}
-                              </span>
-                            </div>
+                            <span className={clsx(
+                              'inline-flex items-center gap-1 text-xs font-bold uppercase tracking-wide px-2 py-1 rounded',
+                              ca.has_incident
+                                ? 'text-red-600 dark:text-red-400 bg-red-100 dark:bg-red-900/50'
+                                : 'text-amber-600 dark:text-amber-400 bg-amber-100 dark:bg-amber-900/50'
+                            )}>
+                              {ca.has_incident ? <AlertTriangle className="w-3 h-3" /> : <TrafficCone className="w-3 h-3" />}
+                              {ca.has_incident ? 'Incident' : 'Congestion'}
+                            </span>
                             <div className="text-right">
                               <span className="font-mono text-sm font-bold">{ca.segment_id}</span>
-                              <p className="text-xs text-gray-500">{(ca.congestion_score * 100).toFixed(1)}% congestion</p>
+                              <p className="text-xs text-gray-500">{(ca.congestion_score * 100).toFixed(1)}%</p>
                             </div>
                           </div>
                           
@@ -348,7 +401,7 @@ export default function LiveNetwork() {
                               <p className="text-xs font-semibold text-gray-700 dark:text-gray-300">Why:</p>
                               <p className="text-xs text-gray-600 dark:text-gray-400">{ca.reason}</p>
                             </div>
-                            <div className="flex gap-3 mt-2 text-[10px] text-gray-500 flex-wrap">
+                            <div className="flex gap-2 mt-2 text-[10px] text-gray-500 flex-wrap">
                               <span className="bg-gray-100 dark:bg-gray-700 px-1.5 py-0.5 rounded">{ca.road_type}</span>
                               <span className="bg-gray-100 dark:bg-gray-700 px-1.5 py-0.5 rounded">{ca.lanes} lanes</span>
                               <span className="bg-gray-100 dark:bg-gray-700 px-1.5 py-0.5 rounded">{ca.speed_kmh} km/h</span>
@@ -368,24 +421,6 @@ export default function LiveNetwork() {
                         </div>
                       ))}
                     </div>
-                  ) : activeIncidents.length > 0 ? (
-                    <div className="space-y-4">
-                      {activeIncidents.map(inc => (
-                        <div key={inc.incident_id} className="rounded-xl border border-red-200 dark:border-red-900/50 bg-red-50 dark:bg-red-900/20 p-4">
-                          <div className="flex justify-between items-start mb-2">
-                            <span className="inline-flex items-center gap-1 text-xs font-bold uppercase tracking-wide text-red-600 dark:text-red-400 bg-red-100 dark:bg-red-900/50 px-2 py-1 rounded">
-                              <AlertTriangle className="w-3 h-3" />
-                              {inc.incident_type?.replace(/_/g, ' ')}
-                            </span>
-                            <span className="font-mono text-sm text-red-800 dark:text-red-300">{inc.segment_id}</span>
-                          </div>
-                          <div className="text-xs text-red-700 dark:text-red-400 mt-2 space-y-1">
-                            <p>Severity: Level {inc.severity} ({inc.lanes_blocked} lanes blocked)</p>
-                            <p>Window: {inc.start_time?.slice(11, 16)} - {inc.end_time?.slice(11, 16) || 'Unknown'}</p>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
                   ) : (
                     <div className="rounded-xl border border-green-200 dark:border-green-900/50 bg-green-50 dark:bg-green-900/20 p-4 flex items-center gap-3 text-green-700 dark:text-green-400">
                       <CheckCircle className="w-5 h-5" />
@@ -393,7 +428,6 @@ export default function LiveNetwork() {
                     </div>
                   )}
 
-                  {/* XAI Explanation */}
                   {analysis.xai_summary && (
                     <div className="mt-4 p-4 rounded-xl border border-indigo-200 dark:border-indigo-900/50 bg-indigo-50 dark:bg-indigo-900/20">
                       <p className="text-xs font-bold text-indigo-800 dark:text-indigo-300 mb-2 flex items-center gap-1">
@@ -406,7 +440,7 @@ export default function LiveNetwork() {
                 </>
               )}
 
-              {/* Tab 4: Forecast — Show for ALL routes with congestion */}
+              {/* Tab 4: Forecast */}
               {activeTab === 'forecast' && (
                 <>
                   {analysis.routes.map((route, ri) => {
@@ -464,7 +498,7 @@ export default function LiveNetwork() {
                 </>
               )}
 
-              {/* Tab 5: Solutions — Infrastructure Interventions */}
+              {/* Tab 5: Solutions */}
               {activeTab === 'solutions' && (
                 <>
                   {/* Diversion Options */}
@@ -500,24 +534,32 @@ export default function LiveNetwork() {
 
                   {/* Infrastructure Interventions */}
                   <div>
-                    <h3 className="text-sm font-bold mb-3 flex items-center gap-2">
+                    <h3 className="text-sm font-bold mb-1 flex items-center gap-2">
                       <Landmark className="w-4 h-4 text-indigo-500" />
                       Infrastructure Interventions
                     </h3>
+                    <p className="text-[10px] text-gray-400 mb-3">Click to visualize on map</p>
                     <div className="space-y-3">
                       {analysis.solutions?.map((sol: any, i: number) => {
                         const IntIcon = INTERVENTION_ICONS[sol.type] ?? Zap;
+                        const isActive = selectedSolutionIdx === i;
                         return (
-                          <div key={i} className={clsx(
-                            'rounded-xl border bg-white dark:bg-gray-800 p-4 border-l-4',
-                            sol.quality === 'high' ? 'border-l-green-500 border-gray-200 dark:border-gray-700' :
-                            sol.quality === 'medium' ? 'border-l-amber-500 border-gray-200 dark:border-gray-700' :
-                            'border-l-red-500 border-gray-200 dark:border-gray-700'
-                          )}>
+                          <div
+                            key={i}
+                            onClick={() => setSelectedSolution(i)}
+                            className={clsx(
+                              'rounded-xl border bg-white dark:bg-gray-800 p-4 border-l-4 cursor-pointer transition-all',
+                              isActive ? 'ring-2 ring-indigo-400 shadow-lg scale-[1.02]' : 'hover:shadow-md',
+                              sol.quality === 'high' ? 'border-l-green-500 border-gray-200 dark:border-gray-700' :
+                              sol.quality === 'medium' ? 'border-l-amber-500 border-gray-200 dark:border-gray-700' :
+                              'border-l-red-500 border-gray-200 dark:border-gray-700'
+                            )}
+                          >
                             <div className="flex justify-between items-start mb-2">
                               <div className="flex items-start gap-2 flex-1">
                                 <div className={clsx(
-                                  'w-8 h-8 rounded-lg flex items-center justify-center shrink-0',
+                                  'w-8 h-8 rounded-lg flex items-center justify-center shrink-0 transition-colors',
+                                  isActive ? 'bg-indigo-100 dark:bg-indigo-900/50 text-indigo-600' :
                                   sol.quality === 'high' ? 'bg-green-100 dark:bg-green-900/30 text-green-600' :
                                   sol.quality === 'medium' ? 'bg-amber-100 dark:bg-amber-900/30 text-amber-600' :
                                   'bg-gray-100 dark:bg-gray-700 text-gray-500'
@@ -526,9 +568,16 @@ export default function LiveNetwork() {
                                 </div>
                                 <div className="flex-1">
                                   <span className="font-bold text-sm text-gray-900 dark:text-gray-100">{sol.action}</span>
-                                  <span className="ml-2 text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-gray-100 dark:bg-gray-700 text-gray-500">
-                                    {(sol.type || '').replace(/_/g, ' ')}
-                                  </span>
+                                  <div className="flex gap-2 mt-0.5">
+                                    <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-gray-100 dark:bg-gray-700 text-gray-500">
+                                      {(sol.type || '').replace(/_/g, ' ')}
+                                    </span>
+                                    {isActive && (
+                                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-indigo-100 dark:bg-indigo-900/50 text-indigo-600 dark:text-indigo-400 font-semibold animate-pulse">
+                                        Showing on map
+                                      </span>
+                                    )}
+                                  </div>
                                 </div>
                               </div>
                               <span className="text-xs font-mono text-gray-500 shrink-0">Conf: {(sol.confidence * 100).toFixed(0)}%</span>
@@ -558,7 +607,6 @@ export default function LiveNetwork() {
                     </div>
                   </div>
 
-                  {/* XAI Summary */}
                   {analysis.xai_summary && (
                     <div className="mt-4 p-4 rounded-xl border border-indigo-200 dark:border-indigo-900/50 bg-indigo-50 dark:bg-indigo-900/20">
                       <p className="text-xs font-bold text-indigo-800 dark:text-indigo-300 mb-2 flex items-center gap-1">

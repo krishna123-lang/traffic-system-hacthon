@@ -116,6 +116,7 @@ interface JourneyState {
   departureTime: string;
   analysis: JourneyAnalysis | null;
   selectedRouteIdx: number;
+  selectedSolutionIdx: number | null;
   activeTab: 'route' | 'congestion' | 'incidents' | 'forecast' | 'solutions';
   isAnalyzing: boolean;
   
@@ -124,6 +125,7 @@ interface JourneyState {
   setDepartureTime: (t: string) => void;
   setAnalysis: (a: JourneyAnalysis | null) => void;
   setSelectedRoute: (idx: number) => void;
+  setSelectedSolution: (idx: number | null) => void;
   setActiveTab: (tab: JourneyState['activeTab']) => void;
   setAnalyzing: (v: boolean) => void;
   reset: () => void;
@@ -140,17 +142,19 @@ export const useJourneyStore = create<JourneyState>((set, get) => ({
   departureTime: '2026-01-11 13:30:00',
   analysis: null,
   selectedRouteIdx: 0,
+  selectedSolutionIdx: null,
   activeTab: 'route',
   isAnalyzing: false,
   
   setSource: (n) => set({ sourceNode: n }),
   setTarget: (n) => set({ targetNode: n }),
   setDepartureTime: (t) => set({ departureTime: t }),
-  setAnalysis: (a) => set({ analysis: a, selectedRouteIdx: 0, activeTab: 'route' }),
+  setAnalysis: (a) => set({ analysis: a, selectedRouteIdx: 0, selectedSolutionIdx: null, activeTab: 'route' }),
   setSelectedRoute: (idx) => set({ selectedRouteIdx: idx }),
+  setSelectedSolution: (idx) => set(state => ({ selectedSolutionIdx: state.selectedSolutionIdx === idx ? null : idx })),
   setActiveTab: (tab) => set({ activeTab: tab }),
   setAnalyzing: (v) => set({ isAnalyzing: v }),
-  reset: () => set({ analysis: null, selectedRouteIdx: 0, activeTab: 'route', isAnalyzing: false }),
+  reset: () => set({ analysis: null, selectedRouteIdx: 0, selectedSolutionIdx: null, activeTab: 'route', isAnalyzing: false }),
   
   selectedRoute: () => {
     const { analysis, selectedRouteIdx } = get();
