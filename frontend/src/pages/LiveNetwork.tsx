@@ -90,13 +90,42 @@ export default function LiveNetwork() {
     }
   }, [analysis]);
 
-  // Build congestion points for map
-  const congestionPoints = currentRoute?.congestion_points?.map(cp => ({
-    segment_id: cp.segment_id,
-    congestion_score: cp.congestion_score
-  }));
+  // Build congestion markers positioned ON the route
+  const congestionMarkers = (() => {
+    if (!currentRoute?.congestion_points?.length || !routeCoords?.length || !currentRoute?.segments?.length) return [];
+    
+    const segments = currentRoute.segments;
+    const incidentSegs = new Set(currentRoute.incidents_on_route?.map(i => i.segment_id) ?? []);
+    
+    // Helper: get position along OSRM route at a given fraction (0..1)
+    const getPositionAtFraction = (frac: number): [number, number] => {
+      if (!routeCoords || routeCoords.length < 2) return [0, 0];
+      const idx = frac * (routeCoords.length - 1);
+      const i = Math.floor(idx);
+      const t = idx - i;
+      if (i >= routeCoords.length - 1) return routeCoords[routeCoords.length - 1];
+      return [
+        routeCoords[i][0] + t * (routeCoords[i + 1][0] - routeCoords[i][0]),
+        routeCoords[i][1] + t * (routeCoords[i + 1][1] - routeCoords[i][1]),
+      ];
+    };
 
-  const incidentSegments = currentRoute?.incidents_on_route?.map(i => i.segment_id) ?? [];
+    return currentRoute.congestion_points.map(cp => {
+      // Find segment index in the route
+      const segIdx = segments.indexOf(cp.segment_id);
+      // Place marker at the midpoint of this segment along the route
+      const frac = segIdx >= 0 ? (segIdx + 0.5) / segments.length : 0.5;
+      const [lon, lat] = getPositionAtFraction(frac);
+      
+      return {
+        segment_id: cp.segment_id,
+        congestion_score: cp.congestion_score,
+        lon,
+        lat,
+        isIncident: incidentSegs.has(cp.segment_id),
+      };
+    });
+  })();
 
   // Build intervention overlay from selected solution
   const interventionOverlay = (() => {
@@ -177,8 +206,7 @@ export default function LiveNetwork() {
             selectedSegmentId={selectedSegment}
             height="h-full"
             routeCoordinates={routeCoords}
-            congestionPoints={congestionPoints}
-            incidentSegments={incidentSegments}
+            congestionMarkers={congestionMarkers}
             sourceNodeId={analysis ? sourceNode : undefined}
             targetNodeId={analysis ? targetNode : undefined}
             isAnimating={isAnimating && !!routeCoords}

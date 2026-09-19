@@ -22,14 +22,21 @@ interface InterventionOverlay {
   label: string;
 }
 
+interface CongestionMarkerData {
+  segment_id: string;
+  congestion_score: number;
+  lon: number;
+  lat: number;
+  isIncident: boolean;
+}
+
 interface Props {
   network?: NetworkData;
   onSegmentClick?: (segmentId: string) => void;
   selectedSegmentId?: string | null;
   height?: string;
   routeCoordinates?: [number, number][];  // Real road-following coords [lon,lat][]
-  congestionPoints?: {segment_id: string, congestion_score: number}[];
-  incidentSegments?: string[];
+  congestionMarkers?: CongestionMarkerData[];
   sourceNodeId?: string;
   targetNodeId?: string;
   isAnimating?: boolean;
@@ -42,8 +49,7 @@ export function NetworkMap({
   selectedSegmentId,
   height = 'h-full',
   routeCoordinates,
-  congestionPoints,
-  incidentSegments,
+  congestionMarkers,
   sourceNodeId,
   targetNodeId,
   isAnimating = false,
@@ -191,30 +197,20 @@ export function NetworkMap({
     targetMarkerRef.current = addNodeMarker(targetNodeId, '#ef4444', 'D');
   }, [sourceNodeId, targetNodeId, network]);
 
-  // Congestion point markers
+  // Congestion point markers — positioned on the actual route
   useEffect(() => {
     const map = mapRef.current;
-    if (!map || !network) return;
+    if (!map) return;
 
     // Clear old markers
     congestionMarkersRef.current.forEach(m => m.remove());
     congestionMarkersRef.current = [];
 
-    if (!congestionPoints?.length) return;
+    if (!congestionMarkers?.length) return;
 
-    congestionPoints.forEach(cp => {
-      const seg = network.segments.find(s => (s.segment_id ?? s.id) === cp.segment_id);
-      if (!seg) return;
-      const srcNode = network.nodes.find(n => n.node_id === seg.source_node);
-      const tgtNode = network.nodes.find(n => n.node_id === seg.target_node);
-      if (!srcNode || !tgtNode) return;
-
-      const midLng = (srcNode.lon + tgtNode.lon) / 2;
-      const midLat = (srcNode.lat + tgtNode.lat) / 2;
-
-      const isIncident = incidentSegments?.includes(cp.segment_id);
-      const bgColor = isIncident ? 'rgba(239,68,68,0.9)' : 'rgba(249,115,22,0.9)';
-      const shadowColor = isIncident ? 'rgba(239,68,68,0.4)' : 'rgba(249,115,22,0.4)';
+    congestionMarkers.forEach(cm => {
+      const bgColor = cm.isIncident ? 'rgba(239,68,68,0.9)' : 'rgba(249,115,22,0.9)';
+      const shadowColor = cm.isIncident ? 'rgba(239,68,68,0.4)' : 'rgba(249,115,22,0.4)';
 
       const el = document.createElement('div');
       el.style.cssText = `
@@ -225,22 +221,22 @@ export function NetworkMap({
         display: flex; align-items: center; justify-content: center;
         font-size: 10px; color: white; font-weight: bold;
       `;
-      el.textContent = isIncident ? '!' : '●';
+      el.textContent = cm.isIncident ? '!' : '\u25CF';
       el.innerHTML += '<style>@keyframes cpulse{0%,100%{transform:scale(1)}50%{transform:scale(1.2)}}</style>';
 
       const marker = new maplibregl.Marker({ element: el })
-        .setLngLat([midLng, midLat])
+        .setLngLat([cm.lon, cm.lat])
         .setPopup(new maplibregl.Popup({ offset: 16 }).setHTML(
           `<div style="padding:4px 8px;font-size:12px">
-            <strong style="color:${isIncident ? '#dc2626' : '#f97316'}">${isIncident ? '⚠ Incident' : '⚠ Congestion'}: ${cp.segment_id}</strong>
-            <br/>${(cp.congestion_score * 100).toFixed(1)}% congestion
+            <strong style="color:${cm.isIncident ? '#dc2626' : '#f97316'}">${cm.isIncident ? '\u26A0 Incident' : '\u26A0 Congestion'}: ${cm.segment_id}</strong>
+            <br/>${(cm.congestion_score * 100).toFixed(1)}% congestion
           </div>`
         ))
         .addTo(map);
 
       congestionMarkersRef.current.push(marker);
     });
-  }, [congestionPoints, incidentSegments, network]);
+  }, [congestionMarkers]);
 
   // Vehicle animation along route
   useEffect(() => {
