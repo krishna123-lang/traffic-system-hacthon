@@ -956,72 +956,228 @@ async def journey_analyze(req: JourneyAnalyzeRequest):
                 "confidence": round(0.9 - i*0.05, 2)
             })
             
-    # Compute dynamic solutions based on actual data
+    # Compute infrastructure intervention solutions based on congestion analysis
     primary = routes_out[0] if routes_out else {}
     primary_avg_c = primary.get("route_avg_congestion", 0)
     primary_max_c = primary.get("route_max_congestion", 0)
     primary_incidents = primary.get("incidents_on_route", [])
     primary_cpoints = primary.get("congestion_points", [])
     
-    # Solution 1: Best diversion or delay
-    if diversions:
-        best_div = max(diversions, key=lambda d: d["congestion_reduction_pct"])
-        sol1_red = max(best_div["congestion_reduction_pct"], 5.0)
-        sol1_action = f"Take {best_div['route_label']} — avoids {len(primary_cpoints)} congestion point(s)"
-        sol1_reason = best_div["reason"]
-        sol1_conf = round(0.85 + 0.03 * (1 if sol1_red > 20 else 0), 2)
-    elif primary_incidents:
-        sol1_red = round(15 + primary_max_c * 30, 1)
-        sol1_action = f"Delay departure by 30 min to clear {primary_incidents[0].get('incident_type', 'incident')} at {primary_incidents[0].get('segment_id', '?')}"
-        sol1_reason = f"Incident clearance expected in 15-30 min based on severity {primary_incidents[0].get('severity', 1)}"
-        sol1_conf = 0.82
-    else:
-        sol1_red = round(10 + primary_avg_c * 20, 1)
-        sol1_action = "Optimize departure time — shift ±15 min for better flow"
-        sol1_reason = f"Current avg congestion {primary_avg_c*100:.1f}% may ease with time shift"
-        sol1_conf = 0.84
+    # Build per-congestion-point incident reasons
+    # Each congestion point gets a unique explanation of what's causing it
+    congestion_incident_map = []
+    for cp in primary_cpoints:
+        seg = cp["segment_id"]
+        seg_state = state_at_time.get(seg, {})
         
-    # Solution 2: Partial avoidance
-    if len(routes_out) > 2:
-        mid_route = routes_out[len(routes_out)//2]
-        sol2_red = round(abs(primary_avg_c - mid_route["route_avg_congestion"]) / max(primary_avg_c, 0.01) * 100, 1)
-        sol2_action = f"Take {mid_route.get('label', 'mid route')} — balanced trade-off ({mid_route.get('eta_minutes', 0):.0f} min ETA)"
-        sol2_reason = f"Avg congestion {mid_route['route_avg_congestion']*100:.1f}% with {mid_route.get('n_hops', 0)} hops"
-    else:
-        sol2_red = round(primary_avg_c * 50, 1)
-        sol2_action = "Reduce speed and maintain safe following distance through congested segments"
-        sol2_reason = f"{len(primary_cpoints)} congestion points on route — steady pace reduces incident risk"
-    sol2_conf = round(sol1_conf - 0.09 - 0.02 * len(primary_cpoints), 2)
+        # Check if this segment has an incident
+        seg_incident = None
+        for inc in primary_incidents:
+            if inc.get("segment_id") == seg:
+                seg_incident = inc
+                break
+        
+        # Check for nearby incidents (1-hop neighbors) if no direct match
+        if seg_incident is None and app_state.seg_graph is not None:
+            try:
+                import networkx as nx
+                neighbors = list(app_state.seg_graph.neighbors(seg)) if seg in app_state.seg_graph else []
+                for nb in neighbors[:5]:
+                    for inc in primary_incidents:
+                        if inc.get("segment_id") == nb:
+                            seg_incident = {**inc, "_upstream": True}
+                            break
+                    if seg_incident:
+                        break
+            except Exception:
+                pass
+        
+        # Determine cause based on actual metrics
+        speed = seg_state.get("speed_kmh", 0)
+        flow = seg_state.get("flow_vph", 0)
+        occ = seg_state.get("occupancy_pct", 0)
+        delay = seg_state.get("delay_min", 0)
+        
+        # Network info
+        net_row = app_state.network_df[app_state.network_df["segment_id"] == seg] if app_state.network_df is not None else pd.DataFrame()
+        ff_speed = float(net_row.iloc[0]["free_flow_speed_kmh"]) if len(net_row) > 0 else 50.0
+        capacity = float(net_row.iloc[0]["capacity_vph"]) if len(net_row) > 0 else 1800.0
+        n_lanes = int(net_row.iloc[0].get("lanes", 2)) if len(net_row) > 0 else 2
+        road_type = str(net_row.iloc[0].get("road_type", "arterial")) if len(net_row) > 0 else "arterial"
+        
+        speed_ratio = speed / max(ff_speed, 1)
+        flow_util = flow / max(capacity, 1)
+        
+        # Determine specific cause
+        if seg_incident and not seg_incident.get("_upstream"):
+            inc_type = str(seg_incident.get("incident_type", "incident")).replace("_", " ").title()
+            cause = f"{inc_type} at {seg} -- {seg_incident.get('lanes_blocked', 1)} lane(s) blocked, severity {seg_incident.get('severity', 1)}/3"
+            reason = f"Direct incident impact: {inc_type} reduces capacity from {n_lanes} to {max(1, n_lanes - seg_incident.get('lanes_blocked', 1))} lanes, causing flow backup"
+        elif seg_incident and seg_incident.get("_upstream"):
+            inc_type = str(seg_incident.get("incident_type", "incident")).replace("_", " ").title()
+            cause = f"Upstream spillback from {inc_type} at {seg_incident.get('segment_id', '?')}"
+            reason = f"Congestion propagated from neighboring segment -- upstream {inc_type} causing queue spillback into {seg}"
+        elif flow_util > 0.85:
+            cause = f"Demand exceeds capacity at {seg} ({flow:.0f}/{capacity:.0f} vph = {flow_util*100:.0f}% utilization)"
+            reason = f"Peak-hour demand overload on {road_type} road. {n_lanes}-lane segment with {capacity:.0f} vph capacity insufficient for {flow:.0f} vph demand"
+        elif speed_ratio < 0.4:
+            cause = f"Severe speed reduction at {seg} ({speed:.1f}/{ff_speed:.0f} km/h = {speed_ratio*100:.0f}%)"
+            reason = f"Stop-and-go traffic pattern. Speed dropped to {speed:.1f} km/h from free-flow {ff_speed:.0f} km/h -- likely signal delay or merging conflict"
+        elif occ > 60:
+            cause = f"High vehicle density at {seg} ({occ:.1f}% occupancy)"
+            reason = f"Occupancy at {occ:.1f}% -- slow-moving queue forming. Delay: {delay:.2f} min per vehicle on this {road_type} segment"
+        else:
+            cause = f"Moderate congestion at {seg} (speed={speed:.1f} km/h, flow={flow:.0f} vph, occupancy={occ:.1f}%)"
+            reason = f"Combined effect of flow ({flow_util*100:.0f}% util), occupancy ({occ:.1f}%), and {delay:.2f} min delay on {n_lanes}-lane {road_type}"
+        
+        congestion_incident_map.append({
+            "segment_id": seg,
+            "congestion_score": cp["congestion_score"],
+            "cause": cause,
+            "reason": reason,
+            "has_incident": seg_incident is not None,
+            "incident": seg_incident if seg_incident and not seg_incident.get("_upstream") else None,
+            "speed_kmh": round(speed, 1),
+            "flow_vph": round(flow, 0),
+            "capacity_vph": round(capacity, 0),
+            "lanes": n_lanes,
+            "road_type": road_type
+        })
     
-    # Solution 3: Proceed with caution
-    sol3_red = round(max(1, primary_avg_c * 10), 1)
-    if primary_incidents:
-        sol3_action = f"Proceed on primary route — expect {primary_incidents[0].get('incident_type', 'delay')} delay at {primary_incidents[0].get('segment_id', '?')}"
-        sol3_reason = f"Direct path but {primary_max_c*100:.1f}% peak congestion. Estimated extra delay: {sum(s.get('delay_min', 0) for s in primary.get('segment_congestion', [])):.1f} min"
-    else:
-        sol3_action = f"Stay on primary route ({primary.get('label', 'Primary')}) — accept current congestion"
-        sol3_reason = f"Avg congestion {primary_avg_c*100:.1f}%, max {primary_max_c*100:.1f}%. ETA {primary.get('eta_minutes', 0):.0f} min"
-    sol3_conf = round(sol2_conf - 0.08 - 0.01 * len(primary_incidents), 2)
+    # Infrastructure intervention suggestions based on congestion analysis
+    interventions = []
     
-    solutions = [
-        {"quality": "high", "action": sol1_action, "congestion_reduction_pct": sol1_red, "confidence": sol1_conf, "reason": sol1_reason, "feasibility": "high"},
-        {"quality": "medium", "action": sol2_action, "congestion_reduction_pct": sol2_red, "confidence": sol2_conf, "reason": sol2_reason, "feasibility": "medium"},
-        {"quality": "low", "action": sol3_action, "congestion_reduction_pct": sol3_red, "confidence": sol3_conf, "reason": sol3_reason, "feasibility": "low"},
-    ]
+    # Analyze congestion points to determine best interventions
+    high_flow_segs = [c for c in congestion_incident_map if c["flow_vph"] / max(c["capacity_vph"], 1) > 0.7]
+    low_speed_segs = [c for c in congestion_incident_map if c["speed_kmh"] < 30]
+    incident_segs = [c for c in congestion_incident_map if c["has_incident"]]
+    narrow_segs = [c for c in congestion_incident_map if c["lanes"] <= 2]
+    
+    # Intervention 1: Flyover / Grade Separator
+    if high_flow_segs:
+        worst = max(high_flow_segs, key=lambda c: c["flow_vph"])
+        int1_red = round(20 + (worst["flow_vph"] / max(worst["capacity_vph"], 1)) * 15, 1)
+        interventions.append({
+            "quality": "high",
+            "type": "flyover",
+            "action": f"Build grade-separated flyover at {worst['segment_id']} ({worst['road_type']})",
+            "congestion_reduction_pct": int1_red,
+            "confidence": round(0.87 + 0.02 * len(high_flow_segs), 2),
+            "reason": f"Flow at {worst['flow_vph']:.0f}/{worst['capacity_vph']:.0f} vph ({worst['flow_vph']/max(worst['capacity_vph'],1)*100:.0f}% utilization). "
+                      f"A flyover eliminates signal delays and at-grade conflicts, increasing effective capacity by 40-60%. "
+                      f"Estimated travel time reduction: {int1_red/3:.0f} min on this segment.",
+            "feasibility": "high",
+            "affected_segments": [c["segment_id"] for c in high_flow_segs[:3]]
+        })
+    
+    # Intervention 2: Lane Addition / Widening
+    if narrow_segs or primary_cpoints:
+        target_segs = narrow_segs if narrow_segs else congestion_incident_map[:2]
+        if target_segs:
+            worst = max(target_segs, key=lambda c: c["congestion_score"])
+            current_lanes = worst["lanes"]
+            new_lanes = current_lanes + 1
+            int2_red = round(15 + (1/max(current_lanes, 1)) * 20, 1)
+            interventions.append({
+                "quality": "high",
+                "type": "lane_addition",
+                "action": f"Add lane to {worst['segment_id']} ({current_lanes} -> {new_lanes} lanes)",
+                "congestion_reduction_pct": int2_red,
+                "confidence": round(0.82 + 0.01 * len(narrow_segs), 2),
+                "reason": f"Current {current_lanes}-lane {worst['road_type']} carries {worst['flow_vph']:.0f} vph. "
+                          f"Adding 1 lane increases capacity by ~{100/max(current_lanes,1):.0f}% to ~{worst['capacity_vph']*(new_lanes/max(current_lanes,1)):.0f} vph. "
+                          f"Speed expected to recover from {worst['speed_kmh']:.0f} km/h toward free-flow.",
+                "feasibility": "medium",
+                "affected_segments": [c["segment_id"] for c in target_segs[:3]]
+            })
+    
+    # Intervention 3: Signal Optimization / Adaptive Signals
+    if low_speed_segs or primary_cpoints:
+        target_segs = low_speed_segs if low_speed_segs else congestion_incident_map[:2]
+        if target_segs:
+            worst = max(target_segs, key=lambda c: c["congestion_score"])
+            int3_red = round(8 + worst["congestion_score"] * 15, 1)
+            interventions.append({
+                "quality": "medium",
+                "type": "signal_optimization",
+                "action": f"Deploy adaptive signal control at {worst['segment_id']} junction",
+                "congestion_reduction_pct": int3_red,
+                "confidence": round(0.78 + 0.015 * len(low_speed_segs), 2),
+                "reason": f"Speed at {worst['speed_kmh']:.1f} km/h indicates stop-and-go pattern from fixed-cycle signals. "
+                          f"AI-adaptive signals (SCOOT/SCATS) optimize green time in real-time, reducing delay by 15-25%. "
+                          f"Low cost, fast deployment (~3-6 months).",
+                "feasibility": "high",
+                "affected_segments": [c["segment_id"] for c in target_segs[:3]]
+            })
+    
+    # Intervention 4: Connector / Bypass Road
+    if len(primary_cpoints) >= 2:
+        seg1 = primary_cpoints[0]["segment_id"]
+        seg2 = primary_cpoints[-1]["segment_id"]
+        int4_red = round(12 + primary_avg_c * 25, 1)
+        interventions.append({
+            "quality": "medium",
+            "type": "connector",
+            "action": f"Build bypass connector between {seg1} and {seg2} zones",
+            "congestion_reduction_pct": int4_red,
+            "confidence": round(0.74 + 0.01 * len(primary_cpoints), 2),
+            "reason": f"Route has {len(primary_cpoints)} congestion points across {len(primary.get('segments', []))} segments. "
+                      f"A parallel connector road between the {seg1} and {seg2} zones distributes traffic load, "
+                      f"reducing through-traffic on the primary corridor by {int4_red:.0f}%.",
+            "feasibility": "medium",
+            "affected_segments": [seg1, seg2]
+        })
+    
+    # Intervention 5: Capacity Upgrade (road resurfacing + lane marking)
+    if congestion_incident_map:
+        worst = max(congestion_incident_map, key=lambda c: c["congestion_score"])
+        int5_red = round(5 + worst["congestion_score"] * 8, 1)
+        interventions.append({
+            "quality": "low",
+            "type": "capacity_upgrade",
+            "action": f"Road resurfacing + optimized lane marking at {worst['segment_id']}",
+            "congestion_reduction_pct": int5_red,
+            "confidence": round(0.88, 2),
+            "reason": f"Improving road surface quality and lane delineation on {worst['road_type']} segment increases "
+                      f"effective speed by 5-10 km/h and reduces incidents caused by poor surface conditions. "
+                      f"Fast, low-cost intervention achievable in 1-2 months.",
+            "feasibility": "high",
+            "affected_segments": [worst["segment_id"]]
+        })
+    
+    # If no congestion points, provide general improvement suggestions
+    if not interventions:
+        interventions = [
+            {"quality": "high", "type": "signal_optimization", "action": "Deploy smart traffic signals along route corridor",
+             "congestion_reduction_pct": round(10 + primary_avg_c * 20, 1), "confidence": 0.82,
+             "reason": "Adaptive signal timing across corridor for smoother flow", "feasibility": "high", "affected_segments": []},
+            {"quality": "medium", "type": "monitoring", "action": "Install real-time traffic monitoring sensors",
+             "congestion_reduction_pct": round(5 + primary_avg_c * 10, 1), "confidence": 0.75,
+             "reason": "Better data enables proactive congestion management", "feasibility": "high", "affected_segments": []},
+            {"quality": "low", "type": "capacity_upgrade", "action": "Road maintenance and marking improvements",
+             "congestion_reduction_pct": round(3 + primary_avg_c * 5, 1), "confidence": 0.88,
+             "reason": "Quick-win improvements to road surface and signage", "feasibility": "high", "affected_segments": []},
+        ]
     
     # Rich XAI summary from actual data
-    # Congestion cause
+    # Congestion cause — now includes all congestion points
     if primary_cpoints:
         worst_cp = max(primary_cpoints, key=lambda p: p["congestion_score"])
-        xai_cong = (f"Primary congestion hotspot at segment {worst_cp['segment_id']} "
-                    f"(score {worst_cp['congestion_score']*100:.1f}%). "
-                    f"{worst_cp['reason']}. "
-                    f"Route has {len(primary_cpoints)} congestion point(s) out of {len(primary.get('segments', []))} total segments.")
+        cp_summaries = "; ".join([f"{c['segment_id']} ({c['congestion_score']*100:.1f}%)" for c in primary_cpoints[:5]])
+        xai_cong = (f"Route has {len(primary_cpoints)} congestion hotspot(s): {cp_summaries}. "
+                    f"Worst: {worst_cp['segment_id']} at {worst_cp['congestion_score']*100:.1f}%. "
+                    f"{worst_cp['reason']}.")
     else:
         xai_cong = f"Route is generally clear — avg congestion {primary_avg_c*100:.1f}%, max {primary_max_c*100:.1f}%. No significant hotspots detected."
     
-    # Incident explanation
-    if primary_incidents:
+    # Incident explanation — now references per-congestion-point analysis
+    if congestion_incident_map and any(c["has_incident"] for c in congestion_incident_map):
+        inc_items = [c for c in congestion_incident_map if c["has_incident"]]
+        xai_inc_parts = []
+        for c in inc_items[:3]:
+            xai_inc_parts.append(f"{c['cause']} — {c['reason']}")
+        xai_inc = " | ".join(xai_inc_parts)
+    elif primary_incidents:
         inc = primary_incidents[0]
         inc_type = str(inc.get("incident_type", "traffic anomaly")).replace("_", " ")
         xai_inc = (f"{inc_type.title()} detected on segment {inc.get('segment_id', '?')} "
@@ -1030,7 +1186,12 @@ async def journey_analyze(req: JourneyAnalyzeRequest):
                    f"Detection confidence: {primary.get('incident_detection_confidence', 0)*100:.1f}%. "
                    f"This reduces segment capacity and causes upstream queuing.")
     else:
-        xai_inc = f"No incidents detected along the route during the journey time window ({req.departure_time[:16]} to arrival)."
+        if congestion_incident_map:
+            # No incidents but congestion — explain the structural causes
+            causes = [f"{c['segment_id']}: {c['cause']}" for c in congestion_incident_map[:3]]
+            xai_inc = "No incidents detected. Congestion causes: " + " | ".join(causes)
+        else:
+            xai_inc = f"No incidents detected along the route during the journey time window ({req.departure_time[:16]} to arrival)."
     
     # Forecast insight
     fc = primary.get("forecast", {})
@@ -1042,11 +1203,11 @@ async def journey_analyze(req: JourneyAnalyzeRequest):
     
     if worsening_count >= 3:
         xai_fc = (f"Congestion is expected to WORSEN significantly over the next hour. "
-                  f"+15 min: {fc_15*100:.1f}% avg → +60 min: {fc_60*100:.1f}% avg. "
+                  f"+15 min: {fc_15*100:.1f}% avg -> +60 min: {fc_60*100:.1f}% avg. "
                   f"Consider departing later or taking an alternate route.")
     elif improving_count >= 3:
         xai_fc = (f"Congestion is expected to IMPROVE over the next hour. "
-                  f"+15 min: {fc_15*100:.1f}% avg → +60 min: {fc_60*100:.1f}% avg. "
+                  f"+15 min: {fc_15*100:.1f}% avg -> +60 min: {fc_60*100:.1f}% avg. "
                   f"Current congestion is near peak and will ease naturally.")
     else:
         xai_fc = (f"Mixed congestion forecast. +15 min: {fc_15*100:.1f}% avg, +60 min: {fc_60*100:.1f}% avg. "
@@ -1058,7 +1219,8 @@ async def journey_analyze(req: JourneyAnalyzeRequest):
         "departure_time": req.departure_time,
         "routes": routes_out,
         "diversions": diversions,
-        "solutions": solutions,
+        "solutions": interventions,
+        "congestion_analysis": congestion_incident_map,
         "xai_summary": {
             "congestion_cause": xai_cong,
             "incident_explanation": xai_inc,

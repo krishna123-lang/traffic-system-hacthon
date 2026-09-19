@@ -1,22 +1,10 @@
 import { Link, useLocation } from 'react-router-dom';
-import {
-  LayoutDashboard, Radio, TrendingUp, AlertTriangle,
-  Navigation, BarChart2, FlaskConical, Activity,
-  Database, ChevronLeft, ChevronRight, Zap
-} from 'lucide-react';
+import { Radio, Zap, ChevronLeft, ChevronRight } from 'lucide-react';
 import clsx from 'clsx';
 import { useJourneyStore } from '../stores/journeyStore';
 
 const NAV_ITEMS = [
-  { to: '/', icon: LayoutDashboard, label: 'Command Center' },
   { to: '/network', icon: Radio, label: 'Live Network' },
-  { to: '/forecast', icon: TrendingUp, label: 'Forecast' },
-  { to: '/incidents', icon: AlertTriangle, label: 'Incidents' },
-  { to: '/diversion', icon: Navigation, label: 'Diversion Advisor' },
-  { to: '/bottlenecks', icon: BarChart2, label: 'Bottleneck Analytics' },
-  { to: '/planning', icon: FlaskConical, label: 'Planning Lab' },
-  { to: '/performance', icon: Activity, label: 'Model Performance' },
-  { to: '/data-health', icon: Database, label: 'Data Health' },
 ];
 
 interface Props {
@@ -51,7 +39,7 @@ export function Sidebar({ collapsed, onToggle }: Props) {
       {/* Navigation */}
       <nav className="flex-1 overflow-y-auto py-3 space-y-0.5 px-2">
         {NAV_ITEMS.map(({ to, icon: Icon, label }) => {
-          const active = to === '/' ? location.pathname === '/' : location.pathname.startsWith(to);
+          const active = location.pathname === to || location.pathname === '/';
           return (
             <Link
               key={to}
@@ -66,7 +54,7 @@ export function Sidebar({ collapsed, onToggle }: Props) {
             >
               <div className="relative">
                 <Icon className="w-4 h-4 shrink-0" />
-                {to === '/network' && analysis && (
+                {analysis && (
                   <span className="absolute -top-1 -right-1 w-2 h-2 bg-green-500 rounded-full border border-gray-900" />
                 )}
               </div>
@@ -82,7 +70,7 @@ export function Sidebar({ collapsed, onToggle }: Props) {
           <p className="text-[10px] text-gray-400 uppercase tracking-wider mb-1 font-semibold flex items-center gap-1.5">
             <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse" /> Active Journey
           </p>
-          <p className="text-xs font-mono font-bold text-gray-200">{sourceNode} → {targetNode}</p>
+          <p className="text-xs font-mono font-bold text-gray-200">{sourceNode} &rarr; {targetNode}</p>
         </div>
       )}
 

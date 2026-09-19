@@ -2,19 +2,10 @@ import { useState } from 'react';
 import { Outlet, useLocation } from 'react-router-dom';
 import { Sidebar } from './Sidebar';
 import { Header } from './Header';
-import { SimBanner } from './SimBanner';
-import { DemoControls } from './DemoControls';
 
 const PAGE_TITLES: Record<string, string> = {
-  '/': 'Command Center',
+  '/': 'Live Network',
   '/network': 'Live Network',
-  '/forecast': 'Forecast Intelligence',
-  '/incidents': 'Incident Intelligence',
-  '/diversion': 'Diversion Advisor',
-  '/bottlenecks': 'Bottleneck Analytics',
-  '/planning': 'Planning Lab',
-  '/performance': 'Model Performance',
-  '/data-health': 'Data Health',
 };
 
 export function Layout() {
@@ -24,7 +15,6 @@ export function Layout() {
 
   return (
     <div className="flex flex-col h-screen overflow-hidden bg-gray-50 dark:bg-gray-900">
-      <SimBanner />
       <div className="flex flex-1 overflow-hidden">
         <Sidebar collapsed={collapsed} onToggle={() => setCollapsed(c => !c)} />
         <div className="flex flex-col flex-1 overflow-hidden">
@@ -34,7 +24,6 @@ export function Layout() {
           </main>
         </div>
       </div>
-      <DemoControls />
     </div>
   );
 }

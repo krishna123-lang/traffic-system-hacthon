@@ -1,18 +1,10 @@
-import { BrowserRouter, Routes, Route } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Layout } from './components/Layout';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { Suspense, lazy } from 'react';
 
-const CommandCenter = lazy(() => import('./pages/CommandCenter'));
 const LiveNetwork = lazy(() => import('./pages/LiveNetwork'));
-const ForecastIntelligence = lazy(() => import('./pages/ForecastIntelligence'));
-const IncidentIntelligence = lazy(() => import('./pages/IncidentIntelligence'));
-const DiversionAdvisor = lazy(() => import('./pages/DiversionAdvisor'));
-const BottleneckAnalytics = lazy(() => import('./pages/BottleneckAnalytics'));
-const PlanningLab = lazy(() => import('./pages/PlanningLab'));
-const ModelPerformance = lazy(() => import('./pages/ModelPerformance'));
-const DataHealth = lazy(() => import('./pages/DataHealth'));
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -43,32 +35,13 @@ export default function App() {
           <Routes>
             <Route path="/" element={<Layout />}>
               <Route index element={
-                <Suspense fallback={<PageLoader />}><CommandCenter /></Suspense>
+                <Suspense fallback={<PageLoader />}><LiveNetwork /></Suspense>
               } />
               <Route path="network" element={
                 <Suspense fallback={<PageLoader />}><LiveNetwork /></Suspense>
               } />
-              <Route path="forecast" element={
-                <Suspense fallback={<PageLoader />}><ForecastIntelligence /></Suspense>
-              } />
-              <Route path="incidents" element={
-                <Suspense fallback={<PageLoader />}><IncidentIntelligence /></Suspense>
-              } />
-              <Route path="diversion" element={
-                <Suspense fallback={<PageLoader />}><DiversionAdvisor /></Suspense>
-              } />
-              <Route path="bottlenecks" element={
-                <Suspense fallback={<PageLoader />}><BottleneckAnalytics /></Suspense>
-              } />
-              <Route path="planning" element={
-                <Suspense fallback={<PageLoader />}><PlanningLab /></Suspense>
-              } />
-              <Route path="performance" element={
-                <Suspense fallback={<PageLoader />}><ModelPerformance /></Suspense>
-              } />
-              <Route path="data-health" element={
-                <Suspense fallback={<PageLoader />}><DataHealth /></Suspense>
-              } />
+              {/* All other routes redirect to Live Network */}
+              <Route path="*" element={<Navigate to="/" replace />} />
             </Route>
           </Routes>
         </ErrorBoundary>
