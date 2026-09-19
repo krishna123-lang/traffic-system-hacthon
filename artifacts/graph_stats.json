@@ -1,0 +1,15 @@
+{
+  "physical_nodes": 233,
+  "physical_edges": 497,
+  "segment_nodes": 436,
+  "segment_edges": 1602,
+  "adj_shape": [
+    436,
+    436
+  ],
+  "edge_index_shape": [
+    2,
+    1602
+  ],
+  "n_segments": 436
+}

@@ -1,0 +1,33 @@
+# Core
+numpy
+pandas
+scipy
+scikit-learn
+xgboost
+networkx
+joblib
+pydantic
+python-dotenv
+
+# Deep learning
+torch
+torch-geometric
+
+# Backend
+fastapi
+uvicorn[standard]
+python-multipart
+
+# Explainability
+shap
+
+# Optional data performance
+polars
+pyarrow
+
+# Testing
+pytest
+httpx
+
+# Optional experiment tracking
+mlflow

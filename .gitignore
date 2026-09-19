@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# Models / generated artifacts (binary weights)
+models/*.pt
+models/*.pth
+models/*.joblib
+models/*.pkl
+
+# Cache & intermediate parquets (large files)
+cache/
+*.parquet
+
+# Large raw traffic dataset files (>30MB, exceeds GitHub limits)
+data/traffic_train.csv
+data/traffic_validation.csv
+data/forecast_targets_train.csv
+data/forecast_targets_validation.csv
+
+# Secrets & environment
+.env
+
+# Frontend
+node_modules/
+frontend/node_modules/
+dist/
+frontend/dist/
+*.tsbuildinfo
+
+# Logs
+*.log
+
+# IDE & OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

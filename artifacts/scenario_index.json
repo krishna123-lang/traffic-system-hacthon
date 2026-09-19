@@ -1,0 +1,12 @@
+{
+  "scenarios": [
+    {
+      "scenario_id": "DEMO_MORNING_PEAK_INCIDENT",
+      "name": "Morning Peak + Incident",
+      "description": "Stalled vehicle on R0067 \u2192 congestion \u2192 spillback",
+      "type": "incident",
+      "total_steps": 31,
+      "incident_segment": "R0067"
+    }
+  ]
+}
