@@ -11,12 +11,17 @@ import clsx from 'clsx';
 
 export default function DiversionAdvisor() {
   const { data: network } = useNetwork();
-  const {
-    journeyActive, sourceNode: jSource, targetNode: jTarget,
-    diversionRoute, activeIncidents, currentXAI,
-    noRouteAvailable, noRouteAction,
-    triggerAutodiversion,
-  } = useJourneyStore();
+  const store = useJourneyStore();
+  const jSource = store.sourceNode;
+  const jTarget = store.targetNode;
+  const analysis = store.analysis;
+  const journeyActive = !!analysis;
+  const diversionRoute = analysis?.diversions?.[0]?.route ?? null;
+  const activeIncidents = analysis?.routes?.[0]?.incidents_on_route ?? [];
+  const currentXAI = null;
+  const noRouteAvailable = false;
+  const noRouteAction = null;
+  const triggerAutodiversion = () => {};
 
   // Local overrides — pre-fill from journey if active
   const [sourceNode, setSourceNode] = useState(jSource || '');
@@ -35,6 +40,14 @@ export default function DiversionAdvisor() {
     mutationFn: () => fetchRoutes(sourceNode, targetNode),
     onSuccess: () => {
       setSelectedRoute(0);
+      const { analysis } = useJourneyStore();
+      const journeyActive = !!analysis;
+      const diversionRoute = analysis?.diversions?.[0]?.route ?? null;
+      const activeIncidents = analysis?.routes?.[0]?.incidents_on_route ?? [];
+      
+      // Fake the trigger condition
+      const triggerIncident = activeIncidents.length > 0 ? activeIncidents[0] : null;
+
       // If journey active, let the journey store handle diversion logic
       if (journeyActive && activeIncidents.length > 0) {
         triggerAutodiversion();

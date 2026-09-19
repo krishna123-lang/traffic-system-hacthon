@@ -32,7 +32,15 @@ export default function IncidentIntelligence() {
   const [filterType, setFilterType] = useState('');
   const [routeOnlyFilter, setRouteOnlyFilter] = useState(false);
 
-  const { journeyActive, routeIncidents, activeIncidents, routeSegments, simTimestamp } = useJourneyStore();
+  const { analysis } = useJourneyStore();
+  const journeyActive = !!analysis;
+  
+  // NOTE: routeIncidents, activeIncidents, routeSegments, simTimestamp have been removed from store
+  const currentRoute = analysis?.routes?.[useJourneyStore.getState().selectedRouteIdx] ?? null;
+  const routeIncidents = currentRoute?.incidents_on_route ?? [];
+  const activeIncidents = currentRoute?.incidents_on_route ?? [];
+  const routeSegments = currentRoute?.segments ?? [];
+  const simTimestamp = analysis?.departure_time;
 
   const { data, isLoading, isError } = useQuery({
     queryKey: ['incidents'],
@@ -142,7 +150,7 @@ export default function IncidentIntelligence() {
                   </thead>
                   <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
                     {displayIncidents.map(inc => {
-                      const isActive = activeIncidents.some(a => a.incident_id === inc.incident_id);
+                      const isActive = activeIncidents.some((a: any) => a.incident_id === inc.incident_id);
                       const isOnRoute = routeSegments.includes(inc.segment_id);
                       const severityNum = typeof inc.severity === 'number' ? inc.severity : 1;
                       return (

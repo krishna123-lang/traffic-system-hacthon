@@ -385,3 +385,76 @@ export const fetchDemoScenarioState = (scenarioId: string, step: number) =>
 
 export const snapToNode = (lat: number, lon: number) =>
   api.get<{ node_id: string; lat: number; lon: number }>('/api/snap-to-node', { params: { lat, lon } }).then(r => r.data);
+
+export interface SegmentCongestion {
+  segment_id: string;
+  congestion_score: number;
+  congestion_state: string;
+  speed_kmh: number;
+  flow_vph: number;
+  delay_min: number;
+}
+
+export interface CongestionPoint {
+  segment_id: string;
+  congestion_score: number;
+  reason: string;
+  position_pct: number;
+}
+
+export interface ForecastHorizonSummary {
+  avg_congestion: number;
+  max_congestion: number;
+  trend: 'worsening' | 'improving' | 'stable';
+}
+
+export interface DiversionOption {
+  route_label: string;
+  route: Route;
+  avoids_segments: string[];
+  congestion_reduction_pct: number;
+  quality: 'high' | 'medium' | 'low';
+  reason: string;
+  confidence: number;
+}
+
+export interface Solution {
+  quality: 'high' | 'medium' | 'low';
+  action: string;
+  congestion_reduction_pct: number;
+  confidence: number;
+  reason: string;
+  feasibility: string;
+}
+
+export interface JourneyRoute extends Route {
+  segment_congestion: SegmentCongestion[];
+  route_avg_congestion: number;
+  route_max_congestion: number;
+  congestion_points: CongestionPoint[];
+  incidents_on_route: Incident[];
+  incident_detection_confidence: number;
+  forecast: Record<string, ForecastHorizonSummary>;
+  forecast_accuracy: Record<string, number>;
+}
+
+export interface JourneyAnalysis {
+  source_node: string;
+  target_node: string;
+  departure_time: string;
+  routes: JourneyRoute[];
+  diversions: DiversionOption[];
+  solutions: Solution[];
+  xai_summary: {
+    congestion_cause: string;
+    incident_explanation: string;
+    forecast_insight: string;
+  };
+}
+
+export const fetchJourneyAnalysis = (source: string, target: string, time: string) =>
+  api.post<JourneyAnalysis>('/api/journey/analyze', {
+    source_node: source,
+    target_node: target,
+    departure_time: time,
+  }).then(r => r.data);

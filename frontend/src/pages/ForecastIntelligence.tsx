@@ -12,16 +12,19 @@ import clsx from 'clsx';
 export default function ForecastIntelligence() {
   const { data: network } = useNetwork();
   const [selectedSegmentId, setSelectedSegmentId] = useState<string>('');
-  const { journeyActive, routeSegments, simStep } = useJourneyStore();
+  const { analysis } = useJourneyStore();
+  const journeyActive = !!analysis;
+  const currentRoute = analysis?.routes?.[useJourneyStore.getState().selectedRouteIdx] ?? null;
+  const routeSegments = currentRoute?.segments ?? [];
 
   const segments = network?.segments ?? [];
-  // When journey is active, auto-select current route segment based on sim step
+  // When journey is active, auto-select current route segment
   useEffect(() => {
     if (journeyActive && routeSegments.length > 0) {
-      const idx = Math.min(simStep, routeSegments.length - 1);
+      const idx = 0;
       setSelectedSegmentId(routeSegments[idx] ?? routeSegments[0]);
     }
-  }, [journeyActive, routeSegments, simStep]);
+  }, [journeyActive, routeSegments]);
 
   const effectiveId = selectedSegmentId || segments[0]?.segment_id || '';
 
@@ -43,7 +46,7 @@ export default function ForecastIntelligence() {
           <h1 className="text-xl font-bold text-gray-900 dark:text-gray-100">Forecast Intelligence</h1>
           <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
             {journeyActive
-              ? `Auto-tracking route segments — step ${simStep + 1}/${routeSegments.length}`
+              ? `Auto-tracking route segments — viewing segment`
               : 'ML-driven congestion predictions across all horizons'}
           </p>
         </div>

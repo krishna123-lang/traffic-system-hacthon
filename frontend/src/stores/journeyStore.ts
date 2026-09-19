@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { Route, Incident } from '../api/client';
+import type { JourneyAnalysis, JourneyRoute, Incident } from '../api/client';
 
 export interface XAIExplanation {
   incidentId: string;
@@ -85,7 +85,7 @@ export function buildXAIExplanation(incident: Incident): XAIExplanation {
   const severityLabels = ['', 'Minor', 'Moderate', 'Severe'];
   const severityNum = incident.severity ?? 1;
   const lanes = incident.lanes_blocked ?? 1;
-  const capacityLoss = Math.round((lanes / 3) * 100); // assume 3 lanes total
+  const capacityLoss = Math.round((lanes / 3) * 100);
 
   return {
     incidentId: incident.incident_id,
@@ -104,416 +104,65 @@ export function buildXAIExplanation(incident: Incident): XAIExplanation {
   };
 }
 
-export function parseSimTime(ts: string): Date {
-  return new Date(ts.replace(' ', 'T'));
-}
-
-export function addMinutes(ts: string, mins: number): string {
-  const d = parseSimTime(ts);
-  d.setMinutes(d.getMinutes() + mins);
-  return d.toISOString().replace('T', ' ').slice(0, 19);
-}
-
-export function formatSimTime(ts: string): string {
-  if (!ts) return '--:--';
-  return ts.slice(11, 16);
-}
-
-export function formatSimDateTime(ts: string): string {
-  if (!ts) return '---';
-  try {
-    const d = parseSimTime(ts);
-    return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }) + ' ' + ts.slice(11, 16);
-  } catch { return ts.slice(0, 16); }
-}
-
 export interface AINoRouteAction {
   title: string;
   steps: string[];
   eta: string;
 }
 
-function buildNoRouteAction(incidents: Incident[]): AINoRouteAction {
-  const types = incidents.map(i => i.incident_type ?? '');
-  const hasRoadClosure = types.includes('road_closure');
-  const hasAccident = types.includes('accident_like');
-
-  if (hasRoadClosure) {
-    return {
-      title: 'All routes blocked by road closure',
-      steps: [
-        'Stop at the nearest safe pullout or parking area immediately.',
-        'Contact city traffic control for diversion instructions.',
-        'Do not attempt to use unverified shortcuts — they may be similarly affected.',
-        'Estimated wait: 30–120 min depending on closure reason.',
-        'If urgent, consider public transport or alternate mode.',
-      ],
-      eta: '30–120 min delay',
-    };
-  } else if (hasAccident) {
-    return {
-      title: 'All alternate routes affected by incidents',
-      steps: [
-        'Pull over safely and stop your vehicle.',
-        'Allow emergency vehicles to pass; keep all lanes clear.',
-        'Wait 20 min for primary incident clearance.',
-        'Re-check route options after clearance — congestion should ease.',
-        'Contact authorities if you need emergency assistance.',
-      ],
-      eta: '20–45 min delay',
-    };
-  }
-  return {
-    title: 'Multiple blockages detected — no clear diversion',
-    steps: [
-      'Stop safely and assess your options.',
-      'Use local knowledge or GPS to find a parallel road not in the route network.',
-      'Delay your journey by 30 minutes and retry routing.',
-      'Consider contacting destination to advise of delay.',
-    ],
-    eta: '30 min delay recommended',
-  };
-}
-
 interface JourneyState {
   sourceNode: string;
   targetNode: string;
   departureTime: string;
-
-  journeyActive: boolean;
-  allRoutes: Route[];
-  selectedRoute: Route | null;
+  analysis: JourneyAnalysis | null;
   selectedRouteIdx: number;
-  routeSegments: string[];
-  routeNodes: string[];
-
-  simTimestamp: string;
-  simStep: number;
-  totalSteps: number;
-  isPlaying: boolean;
-  speed: 1 | 2 | 5;
-
-  allIncidents: Incident[];
-  routeIncidents: Incident[];
-  nearbyIncidents: Incident[];    // incidents on neighboring segments
-  activeIncidents: Incident[];
-  acknowledgedIncidents: string[];
-
-  currentXAI: XAIExplanation | null;
-  diversionRoute: Route | null;
-  diversionTriggeredBy: string | null;
-  noRouteAvailable: boolean;
-  noRouteAction: AINoRouteAction | null;
-
+  activeTab: 'route' | 'congestion' | 'incidents' | 'forecast' | 'solutions';
+  isAnalyzing: boolean;
+  
   setSource: (n: string) => void;
   setTarget: (n: string) => void;
   setDepartureTime: (t: string) => void;
-  startJourney: (routes: Route[], incidents: Incident[]) => void;
-  selectRoute: (idx: number) => void;
-  tick: () => void;
-  setPlaying: (p: boolean) => void;
-  setSpeed: (s: 1 | 2 | 5) => void;
-  setDiversionRoute: (r: Route | null, triggeredBy?: string | null) => void;
-  acknowledgeIncident: (id: string) => void;
-  resetJourney: () => void;
-  setStep: (step: number) => void;
-  triggerAutodiversion: () => void;
-}
-
-// --- Helpers ---
-function computeRouteIncidents(
-  route: Route,
-  allIncidents: Incident[],
-  departureTime: string
-): { routeIncidents: Incident[]; nearbyIncidents: Incident[] } {
-  const segments: string[] = route.segments ?? [];
-  const segSet = new Set(segments);
-  const etaMin = Math.ceil(route.eta_minutes ?? 30);
-  const dep = parseSimTime(departureTime);
-  const arr = new Date(dep.getTime() + etaMin * 60000);
-
-  // Build set of all segments mentioned in affected_neighbors across all incidents
-  const neighborOfRoute = new Set<string>();
-  allIncidents.forEach(inc => {
-    (inc.affected_neighbors ?? []).forEach(n => {
-      if (segSet.has(n)) neighborOfRoute.add(inc.segment_id);
-    });
-    // Also: if incident segment's affected_neighbors includes route segments
-    if (segSet.has(inc.segment_id)) {
-      (inc.affected_neighbors ?? []).forEach(n => neighborOfRoute.add(n));
-    }
-  });
-
-  const routeIncidents: Incident[] = [];
-  const nearbyIncidents: Incident[] = [];
-
-  allIncidents.forEach(inc => {
-    const incStart = parseSimTime(inc.start_time ?? '2000-01-01 00:00:00');
-    const incEnd = parseSimTime(inc.end_time ?? inc.start_time ?? '2000-01-01 00:00:00');
-    if (incStart > arr || incEnd < dep) return; // outside journey window
-
-    if (segSet.has(inc.segment_id)) {
-      routeIncidents.push(inc);
-    } else if (neighborOfRoute.has(inc.segment_id)) {
-      nearbyIncidents.push(inc);
-    }
-  });
-
-  return { routeIncidents, nearbyIncidents };
-}
-
-function getActiveIncidents(
-  routeIncidents: Incident[],
-  acknowledgedIncidents: string[],
-  simTimestamp: string
-): Incident[] {
-  const now = parseSimTime(simTimestamp);
-  return routeIncidents.filter(inc => {
-    if (acknowledgedIncidents.includes(inc.incident_id)) return false;
-    const incStart = parseSimTime(inc.start_time ?? '');
-    // incident window: from start to end (or start + 30min if no end)
-    const incEndRaw = inc.end_time ?? inc.start_time ?? '';
-    const incEnd = parseSimTime(incEndRaw);
-    return now >= incStart && now <= incEnd;
-  });
-}
-
-function findDiversionRoute(
-  allRoutes: Route[],
-  activeIncidentSegs: Set<string>
-): Route | null {
-  return allRoutes.find(r =>
-    !(r.segments ?? []).some(s => activeIncidentSegs.has(s))
-  ) ?? null;
+  setAnalysis: (a: JourneyAnalysis | null) => void;
+  setSelectedRoute: (idx: number) => void;
+  setActiveTab: (tab: JourneyState['activeTab']) => void;
+  setAnalyzing: (v: boolean) => void;
+  reset: () => void;
+  
+  selectedRoute: () => JourneyRoute | null;
+  primaryRoute: () => JourneyRoute | null;
+  hasIncidents: () => boolean;
+  hasCongestion: () => boolean;
 }
 
 export const useJourneyStore = create<JourneyState>((set, get) => ({
   sourceNode: '',
   targetNode: '',
-  departureTime: '2026-01-11 13:00:00',
-
-  journeyActive: false,
-  allRoutes: [],
-  selectedRoute: null,
+  departureTime: '2026-01-11 13:30:00',
+  analysis: null,
   selectedRouteIdx: 0,
-  routeSegments: [],
-  routeNodes: [],
-
-  simTimestamp: '',
-  simStep: 0,
-  totalSteps: 0,
-  isPlaying: false,
-  speed: 1,
-
-  allIncidents: [],
-  routeIncidents: [],
-  nearbyIncidents: [],
-  activeIncidents: [],
-  acknowledgedIncidents: [],
-
-  currentXAI: null,
-  diversionRoute: null,
-  diversionTriggeredBy: null,
-  noRouteAvailable: false,
-  noRouteAction: null,
-
+  activeTab: 'route',
+  isAnalyzing: false,
+  
   setSource: (n) => set({ sourceNode: n }),
   setTarget: (n) => set({ targetNode: n }),
   setDepartureTime: (t) => set({ departureTime: t }),
-
-  startJourney: (routes, incidents) => {
-    const { departureTime } = get();
-    if (!routes.length) return;
-
-    const primary = routes[0];
-    const segments: string[] = primary.segments ?? [];
-    const nodes: string[] = primary.path ?? [];
-    const etaMin = Math.ceil(primary.eta_minutes ?? 30);
-    const totalSteps = Math.max(Math.ceil(etaMin / 2), 6); // 2-min ticks for smoother animation
-
-    const { routeIncidents, nearbyIncidents } = computeRouteIncidents(primary, incidents, departureTime);
-
-    set({
-      journeyActive: true,
-      allRoutes: routes,
-      selectedRoute: primary,
-      selectedRouteIdx: 0,
-      routeSegments: segments,
-      routeNodes: nodes,
-      simTimestamp: departureTime,
-      simStep: 0,
-      totalSteps,
-      isPlaying: false,
-      allIncidents: incidents,
-      routeIncidents,
-      nearbyIncidents,
-      activeIncidents: [],
-      acknowledgedIncidents: [],
-      currentXAI: null,
-      diversionRoute: null,
-      diversionTriggeredBy: null,
-      noRouteAvailable: false,
-      noRouteAction: null,
-    });
+  setAnalysis: (a) => set({ analysis: a, selectedRouteIdx: 0, activeTab: 'route' }),
+  setSelectedRoute: (idx) => set({ selectedRouteIdx: idx }),
+  setActiveTab: (tab) => set({ activeTab: tab }),
+  setAnalyzing: (v) => set({ isAnalyzing: v }),
+  reset: () => set({ analysis: null, selectedRouteIdx: 0, activeTab: 'route', isAnalyzing: false }),
+  
+  selectedRoute: () => {
+    const { analysis, selectedRouteIdx } = get();
+    return analysis?.routes?.[selectedRouteIdx] ?? null;
   },
-
-  selectRoute: (idx) => {
-    const { allRoutes, allIncidents, departureTime } = get();
-    const route = allRoutes[idx];
-    if (!route) return;
-
-    const segments: string[] = route.segments ?? [];
-    const nodes: string[] = route.path ?? [];
-    const etaMin = Math.ceil(route.eta_minutes ?? 30);
-    const totalSteps = Math.max(Math.ceil(etaMin / 2), 6);
-    const { routeIncidents, nearbyIncidents } = computeRouteIncidents(route, allIncidents, departureTime);
-
-    set({
-      selectedRoute: route,
-      selectedRouteIdx: idx,
-      routeSegments: segments,
-      routeNodes: nodes,
-      totalSteps,
-      routeIncidents,
-      nearbyIncidents,
-      activeIncidents: [],
-      diversionRoute: null,
-      diversionTriggeredBy: null,
-      noRouteAvailable: false,
-      noRouteAction: null,
-    });
+  primaryRoute: () => get().analysis?.routes?.[0] ?? null,
+  hasIncidents: () => {
+    const route = get().selectedRoute();
+    return (route?.incidents_on_route?.length ?? 0) > 0;
   },
-
-  tick: () => {
-    const state = get();
-    const { simStep, totalSteps, simTimestamp, routeIncidents, acknowledgedIncidents, allRoutes } = state;
-
-    if (simStep >= totalSteps) {
-      set({ isPlaying: false });
-      return;
-    }
-
-    const newStep = simStep + 1;
-    const newTime = addMinutes(simTimestamp, 2); // 2-min ticks
-
-    const newActive = getActiveIncidents(routeIncidents, acknowledgedIncidents, newTime);
-    const newXAI = newActive.length > 0 ? buildXAIExplanation(newActive[0]) : state.currentXAI;
-
-    let diversionRoute = state.diversionRoute;
-    let noRouteAvailable = state.noRouteAvailable;
-    let noRouteAction = state.noRouteAction;
-
-    // Auto-diversion: when new active incident appears and no diversion yet
-    if (newActive.length > 0 && !state.diversionRoute && !noRouteAvailable) {
-      const incidentSegs = new Set(newActive.map(i => i.segment_id));
-      const safe = findDiversionRoute(allRoutes, incidentSegs);
-
-      if (safe) {
-        diversionRoute = safe;
-      } else {
-        // ALL routes blocked — give AI recommendation
-        noRouteAvailable = true;
-        noRouteAction = buildNoRouteAction(newActive);
-        diversionRoute = null;
-      }
-    }
-
-    // Auto-pause when first incident is detected
-    const shouldPause = newActive.length > 0 && state.activeIncidents.length === 0;
-
-    set({
-      simStep: newStep,
-      simTimestamp: newTime,
-      activeIncidents: newActive,
-      currentXAI: newXAI,
-      diversionRoute,
-      diversionTriggeredBy: diversionRoute ? (newActive[0]?.incident_id ?? null) : null,
-      noRouteAvailable,
-      noRouteAction,
-      isPlaying: shouldPause ? false : state.isPlaying,
-    });
+  hasCongestion: () => {
+    const route = get().selectedRoute();
+    return (route?.congestion_points?.length ?? 0) > 0;
   },
-
-  setStep: (step) => {
-    const { departureTime, totalSteps, routeIncidents, acknowledgedIncidents, allRoutes } = get();
-    const clampedStep = Math.max(0, Math.min(step, totalSteps));
-    const newTime = addMinutes(departureTime, clampedStep * 2);
-
-    const newActive = getActiveIncidents(routeIncidents, acknowledgedIncidents, newTime);
-    const newXAI = newActive.length > 0 ? buildXAIExplanation(newActive[0]) : null;
-
-    let diversionRoute: Route | null = null;
-    let noRouteAvailable = false;
-    let noRouteAction: AINoRouteAction | null = null;
-
-    if (newActive.length > 0) {
-      const incidentSegs = new Set(newActive.map(i => i.segment_id));
-      const safe = findDiversionRoute(allRoutes, incidentSegs);
-      if (safe) {
-        diversionRoute = safe;
-      } else {
-        noRouteAvailable = true;
-        noRouteAction = buildNoRouteAction(newActive);
-      }
-    }
-
-    set({
-      simStep: clampedStep,
-      simTimestamp: newTime,
-      activeIncidents: newActive,
-      currentXAI: newXAI,
-      diversionRoute,
-      noRouteAvailable,
-      noRouteAction,
-      diversionTriggeredBy: diversionRoute ? (newActive[0]?.incident_id ?? null) : null,
-    });
-  },
-
-  triggerAutodiversion: () => {
-    const { activeIncidents, allRoutes } = get();
-    if (!activeIncidents.length) return;
-    const incidentSegs = new Set(activeIncidents.map(i => i.segment_id));
-    const safe = findDiversionRoute(allRoutes, incidentSegs);
-
-    if (safe) {
-      set({ diversionRoute: safe, noRouteAvailable: false, noRouteAction: null });
-    } else {
-      set({
-        diversionRoute: null,
-        noRouteAvailable: true,
-        noRouteAction: buildNoRouteAction(activeIncidents),
-      });
-    }
-  },
-
-  setPlaying: (p) => set({ isPlaying: p }),
-  setSpeed: (s) => set({ speed: s }),
-  setDiversionRoute: (r, triggeredBy = null) => set({ diversionRoute: r, diversionTriggeredBy: triggeredBy ?? null }),
-
-  acknowledgeIncident: (id) => set(state => ({
-    acknowledgedIncidents: [...state.acknowledgedIncidents, id],
-    activeIncidents: state.activeIncidents.filter(i => i.incident_id !== id),
-  })),
-
-  resetJourney: () => set({
-    journeyActive: false,
-    allRoutes: [],
-    selectedRoute: null,
-    selectedRouteIdx: 0,
-    routeSegments: [],
-    routeNodes: [],
-    simTimestamp: '',
-    simStep: 0,
-    totalSteps: 0,
-    isPlaying: false,
-    activeIncidents: [],
-    routeIncidents: [],
-    nearbyIncidents: [],
-    currentXAI: null,
-    diversionRoute: null,
-    diversionTriggeredBy: null,
-    noRouteAvailable: false,
-    noRouteAction: null,
-    acknowledgedIncidents: [],
-  }),
 }));

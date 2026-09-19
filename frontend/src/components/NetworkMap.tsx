@@ -29,6 +29,8 @@ interface Props {
   highlightSegments?: string[];    // Journey primary route segments
   diversionSegments?: string[];    // Diversion route segments (green)
   vehicleNodeId?: string | null;   // Current vehicle position (node_id)
+  segmentCongestionMap?: Map<string, {congestion_score: number, congestion_state: string}>;
+  congestionPoints?: {segment_id: string, congestion_score: number}[];
 }
 
 function buildGeoJSON(
@@ -37,7 +39,8 @@ function buildGeoJSON(
   incidentSegmentId?: string | null,
   propagationSegments?: string[],
   highlightSegments?: string[],
-  diversionSegments?: string[]
+  diversionSegments?: string[],
+  segmentCongestionMap?: Map<string, {congestion_score: number, congestion_state: string}>
 ): GeoJSON.FeatureCollection {
   const nodeMap = new Map<string, Node>(network.nodes.map(n => [n.node_id, n]));
   const stateMap = new Map<string, SegmentState>(
@@ -56,9 +59,16 @@ function buildGeoJSON(
     if (!src || !tgt) continue;
 
     const state = stateMap.get(segId);
+    
+    // Check journey analysis congestion first
+    const journeyState = segmentCongestionMap?.get(segId);
+    
     const effectiveState = incidentSegmentId === segId
       ? 'incident'
-      : (state?.congestion_state ?? seg.congestion_state ?? 'normal');
+      : (journeyState?.congestion_state ?? state?.congestion_state ?? seg.congestion_state ?? 'normal');
+      
+    const effectiveScore = journeyState?.congestion_score ?? state?.congestion_score ?? seg.congestion_score ?? 0;
+
     const isPropagation = propSet.has(segId);
     const isHighlighted = highlightSet.has(segId);
     const isDiversion = diversionSet.has(segId);
@@ -70,7 +80,7 @@ function buildGeoJSON(
         id: segId,
         segment_id: segId,
         congestion_state: effectiveState,
-        congestion_score: state?.congestion_score ?? seg.congestion_score ?? 0,
+        congestion_score: effectiveScore,
         road_class: seg.road_class ?? 'local',
         name: segId,
         is_propagation: isPropagation,
@@ -103,6 +113,8 @@ export function NetworkMap({
   highlightSegments = [],
   diversionSegments = [],
   vehicleNodeId,
+  segmentCongestionMap,
+  congestionPoints,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
@@ -134,7 +146,7 @@ export function NetworkMap({
     const map = mapRef.current;
     if (!map || !network) return;
 
-    const geojson = buildGeoJSON(network, segmentStates, incidentSegment, propagationSegments, highlightSegments, diversionSegments);
+    const geojson = buildGeoJSON(network, segmentStates, incidentSegment, propagationSegments, highlightSegments, diversionSegments, segmentCongestionMap);
 
     const update = () => {
       if (map.getSource('segments')) {
@@ -336,7 +348,42 @@ export function NetworkMap({
         }
       }
     }
-  }, [showIncidentMarker, incidentSegment, network]);
+
+    if (congestionPoints?.length) {
+      congestionPoints.forEach(cp => {
+        const seg = network.segments.find(s => (s.segment_id ?? s.id) === cp.segment_id);
+        if (seg) {
+          const srcNode = network.nodes.find(n => n.node_id === seg.source_node);
+          const tgtNode = network.nodes.find(n => n.node_id === seg.target_node);
+          if (srcNode && tgtNode) {
+            const midLng = (srcNode.lon + tgtNode.lon) / 2;
+            const midLat = (srcNode.lat + tgtNode.lat) / 2;
+
+            const el = document.createElement('div');
+            el.style.cssText = `
+              width: 24px; height: 24px; border-radius: 50%;
+              background: rgba(249,115,22,0.85); border: 2px solid white;
+              box-shadow: 0 0 0 4px rgba(249,115,22,0.35);
+              animation: pulse-orange 1.5s infinite;
+            `;
+            el.innerHTML = '<style>@keyframes pulse-orange{0%,100%{box-shadow:0 0 0 0 rgba(249,115,22,.6)}50%{box-shadow:0 0 0 10px rgba(249,115,22,0)}}</style>';
+
+            const marker = new maplibregl.Marker({ element: el })
+              .setLngLat([midLng, midLat])
+              .setPopup(new maplibregl.Popup({ offset: 20 }).setHTML(`
+                <div style="font-size:13px;padding:4px 8px">
+                  <strong style="color:#f97316">⚠ Congestion: ${cp.segment_id}</strong>
+                </div>
+              `))
+              .addTo(map);
+
+            incidentMarkersRef.current.push(marker);
+          }
+        }
+      });
+    }
+
+  }, [showIncidentMarker, incidentSegment, network, congestionPoints]);
 
   // Vehicle marker — moves to current vehicleNodeId position
   useEffect(() => {

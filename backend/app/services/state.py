@@ -276,6 +276,75 @@ class AppState:
             logger.error(f"State at timestamp failed: {e}")
             return self.current_state
 
+    def get_state_at_time(self, timestamp_str: str) -> dict:
+        """Get traffic state snapshot at a specific timestamp from training data."""
+        if not hasattr(self, "_time_state_cache"):
+            self._time_state_cache = {}
+            
+        if timestamp_str in self._time_state_cache:
+            return self._time_state_cache[timestamp_str]
+            
+        try:
+            import polars as pl
+            cache_path = CACHE_DIR / "traffic_train.parquet"
+            if not cache_path.exists():
+                logger.error("traffic_train.parquet not found in cache")
+                return self.current_state
+                
+            ts = pd.Timestamp(timestamp_str).round('5min')
+            ts_str = str(ts)
+            
+            df = pl.scan_parquet(cache_path)
+            snapshot = df.filter(pl.col("timestamp") == pl.lit(ts_str).str.to_datetime()).collect()
+            
+            if len(snapshot) == 0:
+                logger.warning(f"No data for timestamp {ts_str}")
+                return self.current_state
+                
+            state = {}
+            for row in snapshot.to_dicts():
+                seg_id = row["segment_id"]
+                net_row = self.network_df[self.network_df["segment_id"] == seg_id] if self.network_df is not None else pd.DataFrame()
+                cap = float(net_row["capacity_vph"].iloc[0]) if not net_row.empty else 1000
+                ffs = float(net_row["free_flow_speed_kmh"].iloc[0]) if not net_row.empty else 50
+
+                flow = max(row.get("flow_vph") or 0, 0)
+                speed = max(row.get("speed_kmh") or 0, 0)
+                occ = max(row.get("occupancy_pct") or 0, 0)
+                tt = max(row.get("travel_time_min") or 0, 0)
+                delay = max(row.get("delay_min") or 0, 0)
+                ff_time = max(tt - delay, 0.01)
+                ci = max(row.get("congestion_index") or 0, 0)
+
+                speed_ratio = speed / max(ffs, 1)
+                flow_util = flow / max(cap, 1)
+                tt_ratio = tt / max(ff_time, 0.1)
+                cong_score = (
+                    0.35 * (1 - min(speed_ratio, 1)) +
+                    0.30 * min(flow_util, 1) +
+                    0.20 * min(occ / 100, 1) +
+                    0.15 * min((tt_ratio - 1) / 4, 1)
+                )
+                cong_score = max(0.0, min(cong_score, 1.0))
+
+                state[seg_id] = {
+                    "speed_kmh": speed,
+                    "flow_vph": flow,
+                    "occupancy_pct": occ,
+                    "travel_time_min": tt,
+                    "delay_min": delay,
+                    "queue_length_veh": max(row.get("queue_length_veh") or 0, 0),
+                    "congestion_index": ci,
+                    "congestion_score": cong_score,
+                    "congestion_state": _get_state_label(cong_score),
+                    "flow_utilization": flow_util,
+                }
+            self._time_state_cache[timestamp_str] = state
+            return state
+        except Exception as e:
+            logger.error(f"Error in get_state_at_time: {e}")
+            return self.current_state
+
 
 def _get_state_label(score: float) -> str:
     if score >= 0.9:

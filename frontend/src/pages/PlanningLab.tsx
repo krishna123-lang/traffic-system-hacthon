@@ -32,7 +32,9 @@ function DeltaBadge({ direction, changePct }: { direction: string; changePct: nu
 export default function PlanningLab() {
   const [selectedCandidate, setSelectedCandidate] = useState<string>('');
   const [filterType, setFilterType] = useState<string>('');
-  const { journeyActive, routeSegments } = useJourneyStore();
+  const { analysis } = useJourneyStore();
+  const journeyActive = !!analysis;
+  const routeSegments = analysis?.routes?.[useJourneyStore.getState().selectedRouteIdx]?.segments ?? [];
 
 
   const { data: candData, isLoading: candLoading } = useQuery({

@@ -8,6 +8,8 @@ import { AlertList } from '../components/AlertList';
 import { NetworkMap } from '../components/NetworkMap';
 import { ForecastChart } from '../components/ForecastChart';
 import { SegmentDrawer } from '../components/SegmentDrawer';
+import { JourneyBanner } from '../components/JourneyBanner';
+import { getMapLineColor, getMapLineWidth } from '../lib/congestion';
 import {
   AlertTriangle, Activity, TrendingDown, Zap, Lightbulb, ChevronRight
 } from 'lucide-react';
@@ -59,6 +61,7 @@ export default function CommandCenter() {
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
+      <div className="px-4 pt-4"><JourneyBanner /></div>
       {/* KPI Bar */}
       <div className="grid grid-cols-4 gap-3 p-4 border-b border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 shrink-0">
         <KPICard

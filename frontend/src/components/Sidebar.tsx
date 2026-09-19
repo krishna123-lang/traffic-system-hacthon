@@ -5,6 +5,7 @@ import {
   Database, ChevronLeft, ChevronRight, Zap
 } from 'lucide-react';
 import clsx from 'clsx';
+import { useJourneyStore } from '../stores/journeyStore';
 
 const NAV_ITEMS = [
   { to: '/', icon: LayoutDashboard, label: 'Command Center' },
@@ -25,6 +26,7 @@ interface Props {
 
 export function Sidebar({ collapsed, onToggle }: Props) {
   const location = useLocation();
+  const { analysis, sourceNode, targetNode } = useJourneyStore();
 
   return (
     <aside
@@ -62,12 +64,27 @@ export function Sidebar({ collapsed, onToggle }: Props) {
                   : 'text-gray-400 hover:text-white hover:bg-gray-700'
               )}
             >
-              <Icon className="w-4 h-4 shrink-0" />
-              {!collapsed && <span className="truncate">{label}</span>}
+              <div className="relative">
+                <Icon className="w-4 h-4 shrink-0" />
+                {to === '/network' && analysis && (
+                  <span className="absolute -top-1 -right-1 w-2 h-2 bg-green-500 rounded-full border border-gray-900" />
+                )}
+              </div>
+              {!collapsed && <span className="truncate flex-1">{label}</span>}
             </Link>
           );
         })}
       </nav>
+
+      {/* Mini Journey Summary */}
+      {analysis && !collapsed && (
+        <div className="mx-3 mb-3 p-3 rounded-xl bg-gray-800 border border-gray-700">
+          <p className="text-[10px] text-gray-400 uppercase tracking-wider mb-1 font-semibold flex items-center gap-1.5">
+            <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse" /> Active Journey
+          </p>
+          <p className="text-xs font-mono font-bold text-gray-200">{sourceNode} → {targetNode}</p>
+        </div>
+      )}
 
       {/* Collapse toggle */}
       <button

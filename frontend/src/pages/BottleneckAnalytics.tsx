@@ -11,7 +11,9 @@ import clsx from 'clsx';
 
 export default function BottleneckAnalytics() {
   const [selectedSegment, setSelectedSegment] = useState<string | null>(null);
-  const { journeyActive, routeSegments } = useJourneyStore();
+  const { analysis } = useJourneyStore();
+  const journeyActive = !!analysis;
+  const routeSegments = analysis?.routes?.[useJourneyStore.getState().selectedRouteIdx]?.segments ?? [];
 
 
   const { data: bottleneckData, isLoading: bnLoading } = useQuery({
