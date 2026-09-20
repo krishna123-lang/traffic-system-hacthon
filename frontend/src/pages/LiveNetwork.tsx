@@ -48,6 +48,9 @@ export default function LiveNetwork() {
     topCongested: { segment_id: string; congestion_score: number; speed_kmh: number; road_class: string }[];
     distribution: { label: string; count: number; color: string }[];
   } | null>(null);
+
+  // Feature 5: Police Emergency Priority
+  const [showPolice, setShowPolice] = useState(false);
   
   const {
     sourceNode, targetNode, departureTime,
@@ -491,7 +494,115 @@ export default function LiveNetwork() {
                 Network Dashboard
               </button>
             )}
+
+            {/* Police Emergency Priority */}
+            {analysis && (
+              <button
+                onClick={() => setShowPolice(p => !p)}
+                className={clsx(
+                  'flex items-center gap-2 px-4 py-2 rounded-full text-sm font-medium shadow-lg transition-all',
+                  showPolice
+                    ? 'bg-gradient-to-r from-blue-600 to-red-600 text-white animate-pulse'
+                    : 'bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 border border-gray-200 dark:border-gray-600 hover:bg-blue-50'
+                )}
+              >
+                🚔
+                {showPolice ? 'Priority Active' : 'Emergency Priority'}
+              </button>
+            )}
           </div>
+
+          {/* Police Emergency Corridor Panel */}
+          {showPolice && analysis && currentRoute && (
+            <div className="absolute top-4 left-4 z-30 w-96">
+              <div className="bg-gradient-to-br from-blue-900 to-red-900 rounded-2xl shadow-2xl border-2 border-blue-400 p-4 space-y-3 text-white">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span className="text-2xl animate-pulse">🚨</span>
+                    <div>
+                      <p className="text-sm font-black tracking-wide">EMERGENCY PRIORITY CORRIDOR</p>
+                      <p className="text-[10px] text-blue-200">{sourceNode} → {targetNode} | Police / Ambulance Route</p>
+                    </div>
+                  </div>
+                  <button onClick={() => setShowPolice(false)} className="text-white/60 hover:text-white text-lg font-bold">×</button>
+                </div>
+
+                {/* Corridor Status */}
+                {(() => {
+                  const congPts = currentRoute.congestion_points ?? [];
+                  const incidents = currentRoute.incidents_on_route ?? [];
+                  const blocked = congPts.filter((c: any) => c.congestion_score > 0.3);
+                  const clear = congPts.length === 0 ? currentRoute.path?.length || 0 : (currentRoute.path?.length || 0) - blocked.length;
+                  const etaMin = currentRoute.eta_minutes ?? 0;
+                  const emergencyEta = Math.max(etaMin * 0.55, etaMin - blocked.length * 1.5);
+                  return (
+                    <>
+                      <div className="grid grid-cols-3 gap-2">
+                        <div className="bg-white/10 rounded-lg p-2 text-center">
+                          <p className="text-lg font-black text-green-400">{clear}</p>
+                          <p className="text-[9px] text-green-300">Clear Segments</p>
+                        </div>
+                        <div className="bg-white/10 rounded-lg p-2 text-center">
+                          <p className="text-lg font-black text-red-400">{blocked.length}</p>
+                          <p className="text-[9px] text-red-300">Blocked</p>
+                        </div>
+                        <div className="bg-white/10 rounded-lg p-2 text-center">
+                          <p className="text-lg font-black text-yellow-400">{emergencyEta.toFixed(1)}m</p>
+                          <p className="text-[9px] text-yellow-300">Priority ETA</p>
+                        </div>
+                      </div>
+
+                      {/* Signal Preemption */}
+                      <div className="bg-white/10 rounded-lg p-3">
+                        <p className="text-[10px] font-bold text-blue-300 mb-1">🚦 Signal Preemption Commands</p>
+                        <div className="space-y-1">
+                          {(currentRoute.path ?? []).slice(0, 5).map((nodeId: string) => (
+                            <div key={nodeId} className="flex items-center justify-between text-[10px]">
+                              <span className="text-white/80">{nodeId}</span>
+                              <span className="px-2 py-0.5 bg-green-500/30 rounded text-green-300 font-bold">GREEN HOLD</span>
+                            </div>
+                          ))}
+                          {(currentRoute.path?.length ?? 0) > 5 && (
+                            <p className="text-[9px] text-blue-300">+{(currentRoute.path?.length ?? 0) - 5} more signals</p>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Blocked Segments Alert */}
+                      {blocked.length > 0 && (
+                        <div className="bg-red-500/20 rounded-lg p-3">
+                          <p className="text-[10px] font-bold text-red-300 mb-1">⚠ Congested Segments — Request Clearance</p>
+                          {blocked.slice(0, 4).map((b: any) => (
+                            <div key={b.segment_id} className="flex items-center justify-between text-[10px] py-0.5">
+                              <span className="text-white/90">{b.segment_id}</span>
+                              <span className="text-red-300">{(b.congestion_score * 100).toFixed(0)}% blocked</span>
+                              <span className="px-1.5 py-0.5 bg-yellow-500/30 rounded text-yellow-300 font-bold text-[9px]">CLEAR LANE</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
+                      {/* Active Incidents Warning */}
+                      {incidents.length > 0 && (
+                        <div className="bg-orange-500/20 rounded-lg p-3">
+                          <p className="text-[10px] font-bold text-orange-300 mb-1">🚧 Active Incidents on Route</p>
+                          {incidents.slice(0, 3).map((inc: any) => (
+                            <div key={inc.incident_id || inc.segment_id} className="text-[10px] text-white/80 py-0.5">
+                              {inc.segment_id}: {inc.incident_type?.replace(/_/g, ' ')} — Dispatch traffic police
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
+                      <div className="text-center text-[9px] text-blue-300 pt-1 border-t border-white/10">
+                        🚔 All signals set to priority green | Saved ~{(etaMin - emergencyEta).toFixed(1)} min vs normal ETA
+                      </div>
+                    </>
+                  );
+                })()}
+              </div>
+            </div>
+          )}
 
           {/* Time-Travel Slider */}
           {showHeatmap && (
