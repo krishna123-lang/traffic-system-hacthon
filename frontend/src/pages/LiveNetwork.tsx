@@ -370,30 +370,92 @@ export default function LiveNetwork() {
                   </div>
 
                   {currentRoute.congestion_points.length > 0 && (
-                    <div className="space-y-3 mt-4">
-                      <h3 className="text-sm font-bold">Congestion Hotspots</h3>
+                    <div className="space-y-4 mt-4">
+                      <h3 className="text-sm font-bold flex items-center gap-2">
+                        <AlertTriangle className="w-4 h-4 text-orange-500" />
+                        Congestion Hotspots - Detailed Explanation ({currentRoute.congestion_points.length})
+                      </h3>
                       {currentRoute.congestion_points.map((cp, idx) => {
-                        const cpAnalysis = congestionAnalysis.find((c: any) => c.segment_id === cp.segment_id);
+                        const ca = congestionAnalysis.find((c: any) => c.segment_id === cp.segment_id);
+                        const severity = cp.congestion_score > 0.5 ? 'Severe' : cp.congestion_score > 0.3 ? 'High' : cp.congestion_score > 0.15 ? 'Moderate' : 'Mild';
+                        const severityColor = cp.congestion_score > 0.5 ? 'red' : cp.congestion_score > 0.3 ? 'orange' : cp.congestion_score > 0.15 ? 'amber' : 'yellow';
+                        
                         return (
-                          <div key={idx} className="rounded-xl border border-orange-200 dark:border-orange-900/50 bg-orange-50 dark:bg-orange-900/20 p-3">
-                            <div className="flex justify-between items-start mb-1">
-                              <span className="font-mono font-semibold text-sm text-orange-800 dark:text-orange-300">{cp.segment_id}</span>
-                              <span className="text-xs font-bold text-orange-700 dark:text-orange-400">{(cp.congestion_score * 100).toFixed(1)}%</span>
+                          <div key={idx} className={clsx(
+                            'rounded-xl border-2 p-4 space-y-3',
+                            severityColor === 'red' ? 'border-red-300 dark:border-red-800 bg-red-50 dark:bg-red-900/20' :
+                            severityColor === 'orange' ? 'border-orange-300 dark:border-orange-800 bg-orange-50 dark:bg-orange-900/20' :
+                            'border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-900/20'
+                          )}>
+                            {/* Header */}
+                            <div className="flex justify-between items-center">
+                              <div className="flex items-center gap-2">
+                                <span className={clsx(
+                                  'px-2 py-1 rounded-md text-xs font-bold uppercase tracking-wide',
+                                  severityColor === 'red' ? 'bg-red-200 dark:bg-red-800 text-red-800 dark:text-red-200' :
+                                  severityColor === 'orange' ? 'bg-orange-200 dark:bg-orange-800 text-orange-800 dark:text-orange-200' :
+                                  'bg-amber-200 dark:bg-amber-800 text-amber-800 dark:text-amber-200'
+                                )}>
+                                  {severity}
+                                </span>
+                                <span className="font-mono font-bold text-base">{cp.segment_id}</span>
+                              </div>
+                              <span className="text-lg font-bold text-gray-900 dark:text-gray-100">
+                                {(cp.congestion_score * 100).toFixed(1)}%
+                              </span>
                             </div>
-                            <p className="text-xs text-orange-700 dark:text-orange-400 mb-1">{cp.reason}</p>
-                            {cpAnalysis && (
-                              <div className="mt-2 pt-2 border-t border-orange-200 dark:border-orange-800">
-                                <p className="text-xs font-semibold text-orange-900 dark:text-orange-200 mb-1">
-                                  {cpAnalysis.has_incident ? '!! Incident' : 'Cause'}:
+
+                            {/* What happened */}
+                            <div className="bg-white/60 dark:bg-gray-800/60 rounded-lg p-3">
+                              <p className="text-xs font-bold text-gray-700 dark:text-gray-300 mb-1 flex items-center gap-1">
+                                <AlertTriangle className="w-3 h-3" /> What happened:
+                              </p>
+                              <p className="text-sm text-gray-800 dark:text-gray-200">
+                                {ca?.cause || `Moderate congestion detected at ${cp.segment_id}`}
+                              </p>
+                            </div>
+
+                            {/* Why it happened */}
+                            <div className="bg-white/60 dark:bg-gray-800/60 rounded-lg p-3">
+                              <p className="text-xs font-bold text-gray-700 dark:text-gray-300 mb-1 flex items-center gap-1">
+                                <Info className="w-3 h-3" /> Why this congestion occurs:
+                              </p>
+                              <p className="text-sm text-gray-800 dark:text-gray-200">
+                                {ca?.reason || cp.reason || 'Traffic flow exceeds segment capacity during peak hours'}
+                              </p>
+                            </div>
+
+                            {/* Road characteristics */}
+                            <div className="grid grid-cols-2 gap-2">
+                              <div className="bg-white/60 dark:bg-gray-800/60 rounded-lg p-2 text-center">
+                                <p className="text-[10px] text-gray-500 uppercase tracking-wide">Road Type</p>
+                                <p className="text-sm font-bold capitalize">{ca?.road_type || 'arterial'}</p>
+                              </div>
+                              <div className="bg-white/60 dark:bg-gray-800/60 rounded-lg p-2 text-center">
+                                <p className="text-[10px] text-gray-500 uppercase tracking-wide">Lanes</p>
+                                <p className="text-sm font-bold">{ca?.lanes || 2}</p>
+                              </div>
+                              <div className="bg-white/60 dark:bg-gray-800/60 rounded-lg p-2 text-center">
+                                <p className="text-[10px] text-gray-500 uppercase tracking-wide">Current Speed</p>
+                                <p className="text-sm font-bold">{ca?.speed_kmh?.toFixed(1) || '?'} km/h</p>
+                              </div>
+                              <div className="bg-white/60 dark:bg-gray-800/60 rounded-lg p-2 text-center">
+                                <p className="text-[10px] text-gray-500 uppercase tracking-wide">Flow / Capacity</p>
+                                <p className="text-sm font-bold">{ca?.flow_vph || '?'} / {ca?.capacity_vph || '?'} vph</p>
+                              </div>
+                            </div>
+
+                            {/* Incident info if present */}
+                            {ca?.has_incident && ca?.incident && (
+                              <div className="bg-red-100 dark:bg-red-900/40 rounded-lg p-3 border border-red-200 dark:border-red-800">
+                                <p className="text-xs font-bold text-red-700 dark:text-red-300 mb-1">
+                                  !! Active Incident Detected
                                 </p>
-                                <p className="text-xs text-orange-700 dark:text-orange-400">{cpAnalysis.cause}</p>
-                                <p className="text-xs text-orange-600 dark:text-orange-500 mt-1 italic">{cpAnalysis.reason}</p>
-                                <div className="flex gap-3 mt-2 text-[10px] text-orange-500">
-                                  <span>{cpAnalysis.lanes} lanes</span>
-                                  <span>{cpAnalysis.road_type}</span>
-                                  <span>{cpAnalysis.speed_kmh} km/h</span>
-                                  <span>{cpAnalysis.flow_vph}/{cpAnalysis.capacity_vph} vph</span>
-                                </div>
+                                <p className="text-xs text-red-600 dark:text-red-400">
+                                  Type: {ca.incident.incident_type?.replace(/_/g, ' ')} |
+                                  Severity: Level {ca.incident.severity} |
+                                  {ca.incident.lanes_blocked} lane(s) blocked
+                                </p>
                               </div>
                             )}
                           </div>
