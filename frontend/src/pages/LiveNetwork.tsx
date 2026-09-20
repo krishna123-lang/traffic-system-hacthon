@@ -1,6 +1,7 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useMutation } from '@tanstack/react-query';
-import { fetchJourneyAnalysis, fetchRouteGeometry } from '../api/client';
+import { fetchJourneyAnalysis, fetchRouteGeometry, fetchHeatmap } from '../api/client';
+import type { HeatmapPoint } from '../api/client';
 import { useNetwork } from '../hooks/useNetwork';
 import { NetworkMap } from '../components/NetworkMap';
 import { SegmentDrawer } from '../components/SegmentDrawer';
@@ -8,7 +9,7 @@ import { useJourneyStore } from '../stores/journeyStore';
 import {
   Navigation, MapPin, Clock, AlertTriangle, Zap, Info, CheckCircle,
   TrendingDown, TrendingUp, Minus, Layers, TrafficCone, Landmark, 
-  ArrowRightLeft, PaintBucket, Radio, Eye, EyeOff
+  ArrowRightLeft, PaintBucket, Radio, Eye, EyeOff, Volume2, VolumeX, Map as MapIcon
 } from 'lucide-react';
 import clsx from 'clsx';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 'recharts';
@@ -26,6 +27,27 @@ export default function LiveNetwork() {
   const [selectedSegment, setSelectedSegment] = useState<string | null>(null);
   const [routeCoords, setRouteCoords] = useState<[number, number][] | undefined>();
   const [isAnimating, setIsAnimating] = useState(true);
+  
+  // Feature 1: City-wide Heatmap
+  const [showHeatmap, setShowHeatmap] = useState(false);
+  const [heatmapData, setHeatmapData] = useState<HeatmapPoint[]>([]);
+  
+  // Feature 2: AI Voice Briefing
+  const [isSpeaking, setIsSpeaking] = useState(false);
+  const [showBriefing, setShowBriefing] = useState(false);
+  
+  // Feature 3: Time-Travel Slider
+  const [timeSliderHour, setTimeSliderHour] = useState(13.5); // 13:30
+  const [isTimeAnimating, setIsTimeAnimating] = useState(false);
+  
+  // Feature 4: Network Health Dashboard
+  const [showDashboard, setShowDashboard] = useState(false);
+  const [networkStats, setNetworkStats] = useState<{
+    totalSegs: number; avgCong: number; severeCount: number;
+    highCount: number; normalCount: number; healthScore: number;
+    topCongested: { segment_id: string; congestion_score: number; speed_kmh: number; road_class: string }[];
+    distribution: { label: string; count: number; color: string }[];
+  } | null>(null);
   
   const {
     sourceNode, targetNode, departureTime,
@@ -160,6 +182,176 @@ export default function LiveNetwork() {
     };
   })();
 
+  // ── Feature 1: City-wide Heatmap ──
+  useEffect(() => {
+    if (!showHeatmap) {
+      setHeatmapData([]);
+      return;
+    }
+    fetchHeatmap(departureTime || undefined)
+      .then(data => setHeatmapData(data.points))
+      .catch(() => setHeatmapData([]));
+  }, [showHeatmap, departureTime]);
+
+  // ── Feature 2: AI Voice Briefing ──
+  const generateBriefing = useCallback((): string => {
+    if (!analysis || !currentRoute) return '';
+    const route = currentRoute;
+    const incidents = route.incidents_on_route ?? [];
+    const congPts = route.congestion_points ?? [];
+    const solutions = analysis.solutions ?? [];
+    
+    const typeLabels: Record<string, string> = {
+      accident_like: 'a traffic collision',
+      lane_blockage: 'a lane blockage',
+      stalled_vehicle: 'a stalled vehicle',
+      demand_surge: 'a traffic demand surge',
+      weather_hazard: 'adverse weather conditions',
+      road_closure: 'a road closure',
+    };
+
+    let briefing = `Traffic Intelligence Briefing. `;
+    briefing += `Your journey from ${sourceNode} to ${targetNode} covers ${route.total_length_km?.toFixed(1) || '?'} kilometers `;
+    briefing += `with an estimated arrival time of ${route.eta_minutes?.toFixed(1) || '?'} minutes. `;
+    
+    if (congPts.length === 0) {
+      briefing += `Great news! The route is clear with no significant congestion. `;
+    } else {
+      briefing += `We have detected ${congPts.length} congestion hotspot${congPts.length > 1 ? 's' : ''} on your route. `;
+      briefing += `Average congestion is ${((route.route_avg_congestion ?? 0) * 100).toFixed(0)} percent, `;
+      briefing += `with peak congestion reaching ${((route.route_max_congestion ?? 0) * 100).toFixed(0)} percent. `;
+    }
+    
+    if (incidents.length > 0) {
+      const activeInc = incidents.filter((i: any) => i.status === 'active');
+      const predictedInc = incidents.filter((i: any) => i.status === 'predicted');
+      
+      if (activeInc.length > 0) {
+        briefing += `Alert! There ${activeInc.length === 1 ? 'is' : 'are'} ${activeInc.length} active incident${activeInc.length > 1 ? 's' : ''} on your route. `;
+        activeInc.forEach((inc: any) => {
+          const typeDesc = typeLabels[inc.incident_type] || inc.incident_type?.replace(/_/g, ' ');
+          briefing += `Segment ${inc.segment_id} has ${typeDesc} with severity level ${inc.severity}. `;
+        });
+      }
+      
+      if (predictedInc.length > 0) {
+        briefing += `Our AI model predicts ${predictedInc.length} potential incident${predictedInc.length > 1 ? 's' : ''}. `;
+        predictedInc.forEach((inc: any) => {
+          const typeDesc = typeLabels[inc.incident_type] || inc.incident_type?.replace(/_/g, ' ');
+          const conf = ((inc.confidence || 0.7) * 100).toFixed(0);
+          briefing += `${typeDesc} at segment ${inc.segment_id} with ${conf} percent confidence. `;
+        });
+      }
+    }
+    
+    if (solutions.length > 0) {
+      briefing += `We recommend ${solutions.length} infrastructure intervention${solutions.length > 1 ? 's' : ''} to reduce congestion: `;
+      solutions.slice(0, 3).forEach((sol: any) => {
+        const action = sol.action || sol.type?.replace(/_/g, ' ');
+        briefing += `${action}. `;
+      });
+    }
+    
+    briefing += `This analysis has a detection confidence of ${((route.incident_detection_confidence ?? 0.85) * 100).toFixed(0)} percent. `;
+    briefing += `Stay safe and have a good journey!`;
+    
+    return briefing;
+  }, [analysis, currentRoute, sourceNode, targetNode]);
+
+  const toggleVoice = useCallback(() => {
+    if (isSpeaking) {
+      window.speechSynthesis.cancel();
+      setIsSpeaking(false);
+      return;
+    }
+    
+    const text = generateBriefing();
+    if (!text) return;
+    
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.rate = 0.95;
+    utterance.pitch = 1.0;
+    utterance.volume = 1.0;
+    
+    // Try to use a good English voice
+    const voices = window.speechSynthesis.getVoices();
+    const preferred = voices.find(v => v.name.includes('Google') && v.lang.startsWith('en')) 
+      || voices.find(v => v.lang.startsWith('en-'));
+    if (preferred) utterance.voice = preferred;
+    
+    utterance.onend = () => setIsSpeaking(false);
+    utterance.onerror = () => setIsSpeaking(false);
+    
+    setIsSpeaking(true);
+    setShowBriefing(true);
+    window.speechSynthesis.speak(utterance);
+  }, [isSpeaking, generateBriefing]);
+
+  // ── Feature 3: Time-Travel Slider ──
+  useEffect(() => {
+    if (!isTimeAnimating) return;
+    const interval = setInterval(() => {
+      setTimeSliderHour(prev => {
+        const next = prev + 0.25; // advance 15 min
+        if (next > 23) {
+          setIsTimeAnimating(false);
+          return 6;
+        }
+        return next;
+      });
+    }, 600);
+    return () => clearInterval(interval);
+  }, [isTimeAnimating]);
+
+  // When time slider changes, update heatmap if visible
+  useEffect(() => {
+    if (!showHeatmap) return;
+    const h = Math.floor(timeSliderHour);
+    const m = Math.round((timeSliderHour - h) * 60);
+    const ts = `2026-01-11 ${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:00`;
+    fetchHeatmap(ts)
+      .then(data => {
+        setHeatmapData(data.points);
+        // Compute network stats
+        const pts = data.points;
+        const scores = pts.map(p => p.congestion_score);
+        const avg = scores.reduce((a, b) => a + b, 0) / Math.max(scores.length, 1);
+        const severe = scores.filter(s => s > 0.5).length;
+        const high = scores.filter(s => s > 0.3 && s <= 0.5).length;
+        const moderate = scores.filter(s => s > 0.15 && s <= 0.3).length;
+        const normal = scores.filter(s => s <= 0.15).length;
+        
+        const topCongested = [...pts]
+          .sort((a, b) => b.congestion_score - a.congestion_score)
+          .slice(0, 5);
+        
+        setNetworkStats({
+          totalSegs: pts.length,
+          avgCong: avg,
+          severeCount: severe,
+          highCount: high,
+          normalCount: normal,
+          healthScore: Math.max(0, 1 - avg * 1.5),
+          topCongested,
+          distribution: [
+            { label: 'Normal', count: normal, color: '#22c55e' },
+            { label: 'Moderate', count: moderate, color: '#eab308' },
+            { label: 'High', count: high, color: '#f97316' },
+            { label: 'Severe', count: severe, color: '#ef4444' },
+          ],
+        });
+      })
+      .catch(() => {});
+  }, [timeSliderHour, showHeatmap]);
+
+  const formatSliderTime = (h: number) => {
+    const hr = Math.floor(h);
+    const mn = Math.round((h - hr) * 60);
+    const ampm = hr >= 12 ? 'PM' : 'AM';
+    const hr12 = hr > 12 ? hr - 12 : hr === 0 ? 12 : hr;
+    return `${hr12}:${String(mn).padStart(2, '0')} ${ampm}`;
+  };
+
   return (
     <div className="flex flex-col h-full overflow-hidden relative">
       {/* Top Input Bar */}
@@ -233,10 +425,13 @@ export default function LiveNetwork() {
             targetNodeId={analysis ? targetNode : undefined}
             isAnimating={isAnimating && !!routeCoords}
             interventionOverlay={interventionOverlay}
+            heatmapData={showHeatmap ? heatmapData : undefined}
           />
-          {/* Animation toggle */}
-          {routeCoords && (
-            <div className="absolute bottom-4 left-4 z-10">
+
+          {/* Map control buttons */}
+          <div className="absolute bottom-4 left-4 z-10 flex gap-2">
+            {/* Vehicle toggle */}
+            {routeCoords && (
               <button
                 onClick={() => setIsAnimating(a => !a)}
                 className={clsx(
@@ -249,6 +444,262 @@ export default function LiveNetwork() {
                 {isAnimating ? <Eye className="w-4 h-4" /> : <EyeOff className="w-4 h-4" />}
                 {isAnimating ? 'Vehicle Moving' : 'Vehicle Paused'}
               </button>
+            )}
+
+            {/* Heatmap toggle */}
+            <button
+              onClick={() => setShowHeatmap(h => !h)}
+              className={clsx(
+                'flex items-center gap-2 px-4 py-2 rounded-full text-sm font-medium shadow-lg transition-all',
+                showHeatmap
+                  ? 'bg-gradient-to-r from-red-500 to-orange-500 text-white hover:from-red-600 hover:to-orange-600'
+                  : 'bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 border border-gray-200 dark:border-gray-600'
+              )}
+            >
+              <MapIcon className="w-4 h-4" />
+              {showHeatmap ? `City Heatmap (${heatmapData.length} segments)` : 'City Heatmap'}
+            </button>
+
+            {/* AI Voice Briefing */}
+            {analysis && (
+              <button
+                onClick={toggleVoice}
+                className={clsx(
+                  'flex items-center gap-2 px-4 py-2 rounded-full text-sm font-medium shadow-lg transition-all',
+                  isSpeaking
+                    ? 'bg-gradient-to-r from-purple-500 to-pink-500 text-white animate-pulse'
+                    : 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white hover:from-purple-700 hover:to-indigo-700'
+                )}
+              >
+                {isSpeaking ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
+                {isSpeaking ? 'Stop Briefing' : 'AI Voice Briefing'}
+              </button>
+            )}
+
+            {/* Network Dashboard toggle */}
+            {showHeatmap && (
+              <button
+                onClick={() => setShowDashboard(d => !d)}
+                className={clsx(
+                  'flex items-center gap-2 px-4 py-2 rounded-full text-sm font-medium shadow-lg transition-all',
+                  showDashboard
+                    ? 'bg-gradient-to-r from-emerald-500 to-teal-500 text-white'
+                    : 'bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 border border-gray-200 dark:border-gray-600 hover:bg-gray-100'
+                )}
+              >
+                <TrendingUp className="w-4 h-4" />
+                Network Dashboard
+              </button>
+            )}
+          </div>
+
+          {/* Time-Travel Slider */}
+          {showHeatmap && (
+            <div className="absolute bottom-16 left-4 right-4 z-10">
+              <div className="bg-white/95 dark:bg-gray-900/95 backdrop-blur-lg rounded-2xl shadow-2xl border border-gray-200 dark:border-gray-700 px-5 py-3">
+                <div className="flex items-center gap-4">
+                  <button
+                    onClick={() => setIsTimeAnimating(a => !a)}
+                    className={clsx(
+                      'w-10 h-10 rounded-full flex items-center justify-center shadow-lg transition-all text-lg',
+                      isTimeAnimating
+                        ? 'bg-red-500 text-white hover:bg-red-600'
+                        : 'bg-gradient-to-r from-indigo-500 to-purple-500 text-white hover:from-indigo-600 hover:to-purple-600'
+                    )}
+                  >
+                    {isTimeAnimating ? '⏸' : '▶'}
+                  </button>
+                  
+                  <div className="flex-1 flex flex-col gap-1">
+                    <div className="flex items-center justify-between text-[10px] font-medium text-gray-500 dark:text-gray-400">
+                      <span>6:00 AM</span>
+                      <span className="text-sm font-bold text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-900/30 px-3 py-0.5 rounded-full">
+                        {isTimeAnimating ? '🕐 ' : '⏱ '}{formatSliderTime(timeSliderHour)}
+                      </span>
+                      <span>11:00 PM</span>
+                    </div>
+                    <input
+                      type="range"
+                      min={6}
+                      max={23}
+                      step={0.25}
+                      value={timeSliderHour}
+                      onChange={(e) => { setTimeSliderHour(parseFloat(e.target.value)); setIsTimeAnimating(false); }}
+                      className="w-full h-2 bg-gradient-to-r from-green-300 via-yellow-300 via-orange-400 to-red-500 rounded-full appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-5 [&::-webkit-slider-thumb]:h-5 [&::-webkit-slider-thumb]:bg-white [&::-webkit-slider-thumb]:border-3 [&::-webkit-slider-thumb]:border-indigo-500 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:shadow-lg [&::-webkit-slider-thumb]:cursor-grab"
+                    />
+                  </div>
+                  
+                  <div className="text-center min-w-[60px]">
+                    <p className="text-[10px] text-gray-400">Segments</p>
+                    <p className="text-sm font-bold text-gray-800 dark:text-gray-200">{heatmapData.length}</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Floating AI Briefing Panel */}
+          {showBriefing && analysis && (
+            <div className="absolute top-4 left-4 z-20 max-w-md animate-in slide-in-from-left">
+              <div className="bg-white/95 dark:bg-gray-900/95 backdrop-blur-lg rounded-2xl shadow-2xl border-2 border-purple-200 dark:border-purple-800 p-4 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <div className={clsx(
+                      'w-8 h-8 rounded-full flex items-center justify-center',
+                      isSpeaking ? 'bg-purple-500 animate-pulse' : 'bg-purple-600'
+                    )}>
+                      <Volume2 className="w-4 h-4 text-white" />
+                    </div>
+                    <div>
+                      <p className="text-sm font-bold text-gray-900 dark:text-gray-100">AI Traffic Briefing</p>
+                      <p className="text-[10px] text-gray-500">{isSpeaking ? '🔊 Speaking...' : 'Briefing ready'}</p>
+                    </div>
+                  </div>
+                  <button 
+                    onClick={() => { setShowBriefing(false); window.speechSynthesis.cancel(); setIsSpeaking(false); }}
+                    className="text-gray-400 hover:text-gray-600 text-lg font-bold"
+                  >×</button>
+                </div>
+                <div className="max-h-48 overflow-y-auto text-xs text-gray-700 dark:text-gray-300 leading-relaxed bg-purple-50 dark:bg-purple-900/20 rounded-lg p-3">
+                  {generateBriefing()}
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    onClick={toggleVoice}
+                    className={clsx(
+                      'flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-xs font-medium transition-all',
+                      isSpeaking 
+                        ? 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400 hover:bg-red-200'
+                        : 'bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-400 hover:bg-purple-200'
+                    )}
+                  >
+                    {isSpeaking ? <><VolumeX className="w-3 h-3" /> Stop</> : <><Volume2 className="w-3 h-3" /> Read Aloud</>}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Network Health Dashboard */}
+          {showDashboard && showHeatmap && networkStats && (
+            <div className="absolute top-4 right-4 z-20 w-80">
+              <div className="bg-white/95 dark:bg-gray-900/95 backdrop-blur-lg rounded-2xl shadow-2xl border-2 border-emerald-200 dark:border-emerald-800 p-4 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <div className="w-8 h-8 rounded-full bg-gradient-to-r from-emerald-500 to-teal-500 flex items-center justify-center">
+                      <TrendingUp className="w-4 h-4 text-white" />
+                    </div>
+                    <div>
+                      <p className="text-sm font-bold text-gray-900 dark:text-gray-100">Network Health</p>
+                      <p className="text-[10px] text-gray-500">{formatSliderTime(timeSliderHour)} | {networkStats.totalSegs} segments</p>
+                    </div>
+                  </div>
+                  <button 
+                    onClick={() => setShowDashboard(false)}
+                    className="text-gray-400 hover:text-gray-600 text-lg font-bold"
+                  >&#xd7;</button>
+                </div>
+                
+                {/* Health Gauge */}
+                <div className="flex items-center justify-center py-2">
+                  <div className="relative w-28 h-28">
+                    <svg viewBox="0 0 120 120" className="w-full h-full -rotate-90">
+                      <circle cx="60" cy="60" r="50" fill="none" stroke="#e5e7eb" strokeWidth="10" />
+                      <circle 
+                        cx="60" cy="60" r="50" fill="none" 
+                        stroke={networkStats.healthScore > 0.7 ? '#22c55e' : networkStats.healthScore > 0.4 ? '#eab308' : '#ef4444'}
+                        strokeWidth="10" 
+                        strokeDasharray={`${networkStats.healthScore * 314} 314`}
+                        strokeLinecap="round"
+                        className="transition-all duration-700"
+                      />
+                    </svg>
+                    <div className="absolute inset-0 flex flex-col items-center justify-center">
+                      <span className="text-2xl font-black" style={{ color: networkStats.healthScore > 0.7 ? '#22c55e' : networkStats.healthScore > 0.4 ? '#eab308' : '#ef4444' }}>
+                        {(networkStats.healthScore * 100).toFixed(0)}%
+                      </span>
+                      <span className="text-[9px] text-gray-500 font-medium">
+                        {networkStats.healthScore > 0.7 ? 'HEALTHY' : networkStats.healthScore > 0.4 ? 'MODERATE' : 'STRESSED'}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* KPI Row */}
+                <div className="grid grid-cols-3 gap-2">
+                  <div className="bg-green-50 dark:bg-green-900/20 rounded-lg p-2 text-center">
+                    <p className="text-lg font-bold text-green-600">{networkStats.normalCount}</p>
+                    <p className="text-[9px] text-green-700 dark:text-green-400">Normal</p>
+                  </div>
+                  <div className="bg-orange-50 dark:bg-orange-900/20 rounded-lg p-2 text-center">
+                    <p className="text-lg font-bold text-orange-600">{networkStats.highCount}</p>
+                    <p className="text-[9px] text-orange-700 dark:text-orange-400">High</p>
+                  </div>
+                  <div className="bg-red-50 dark:bg-red-900/20 rounded-lg p-2 text-center">
+                    <p className="text-lg font-bold text-red-600">{networkStats.severeCount}</p>
+                    <p className="text-[9px] text-red-700 dark:text-red-400">Severe</p>
+                  </div>
+                </div>
+
+                {/* Distribution Bar */}
+                <div>
+                  <p className="text-[10px] font-semibold text-gray-500 mb-1">Congestion Distribution</p>
+                  <div className="flex h-4 rounded-full overflow-hidden bg-gray-100 dark:bg-gray-800">
+                    {networkStats.distribution.map((d) => (
+                      d.count > 0 && (
+                        <div
+                          key={d.label}
+                          style={{ width: `${(d.count / networkStats.totalSegs) * 100}%`, backgroundColor: d.color }}
+                          className="transition-all duration-500 flex items-center justify-center"
+                        >
+                          {d.count > 10 && <span className="text-[8px] font-bold text-white">{d.count}</span>}
+                        </div>
+                      )
+                    ))}
+                  </div>
+                  <div className="flex justify-between mt-1">
+                    {networkStats.distribution.map(d => (
+                      <span key={d.label} className="text-[8px] flex items-center gap-0.5" style={{ color: d.color }}>
+                        <span className="w-1.5 h-1.5 rounded-full inline-block" style={{ backgroundColor: d.color }} />
+                        {d.label}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Top Congested Segments */}
+                <div>
+                  <p className="text-[10px] font-semibold text-gray-500 mb-1">🔥 Top Congested Segments</p>
+                  <div className="space-y-1">
+                    {networkStats.topCongested.map((seg, i) => (
+                      <div key={seg.segment_id} className="flex items-center gap-2 bg-gray-50 dark:bg-gray-800 rounded-lg px-2 py-1.5">
+                        <span className={clsx(
+                          'w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold text-white',
+                          i === 0 ? 'bg-red-500' : i === 1 ? 'bg-orange-500' : 'bg-yellow-500'
+                        )}>
+                          {i + 1}
+                        </span>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-[11px] font-semibold text-gray-800 dark:text-gray-200">{seg.segment_id}</p>
+                          <p className="text-[9px] text-gray-500">{seg.road_class} | {seg.speed_kmh} km/h</p>
+                        </div>
+                        <div className="text-right">
+                          <span 
+                            className="text-xs font-bold"
+                            style={{ color: seg.congestion_score > 0.5 ? '#ef4444' : seg.congestion_score > 0.3 ? '#f97316' : '#eab308' }}
+                          >
+                            {(seg.congestion_score * 100).toFixed(1)}%
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="text-center text-[9px] text-gray-400 pt-1 border-t border-gray-100 dark:border-gray-800">
+                  Avg Congestion: {(networkStats.avgCong * 100).toFixed(1)}% | Updated in real-time
+                </div>
+              </div>
             </div>
           )}
         </div>

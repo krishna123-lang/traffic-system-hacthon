@@ -483,3 +483,25 @@ export interface RouteGeometry {
 
 export const fetchRouteGeometry = (nodeIds: string[]) =>
   api.post<RouteGeometry>('/api/route/geometry', { node_ids: nodeIds }).then(r => r.data);
+
+export interface HeatmapPoint {
+  segment_id: string;
+  lon: number;
+  lat: number;
+  congestion_score: number;
+  speed_kmh: number;
+  flow_vph: number;
+  occupancy_pct: number;
+  road_class: string;
+  lanes: number;
+  line: [number, number][];
+}
+
+export interface HeatmapData {
+  timestamp: string;
+  total_segments: number;
+  points: HeatmapPoint[];
+}
+
+export const fetchHeatmap = (timestamp?: string) =>
+  api.get<HeatmapData>('/api/heatmap', { params: timestamp ? { timestamp } : {} }).then(r => r.data);

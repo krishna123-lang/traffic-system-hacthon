@@ -206,6 +206,67 @@ async def get_state(timestamp: Optional[str] = Query(None)):
 
 
 # ──────────────────────────────────────────────
+# CITY-WIDE CONGESTION HEATMAP
+# ──────────────────────────────────────────────
+
+@app.get("/api/heatmap", tags=["Traffic"])
+async def get_heatmap(timestamp: Optional[str] = Query(None)):
+    """Return all segments as heatmap points with congestion intensity for city-wide visualization."""
+    if app_state.nodes_df is None or app_state.network_df is None:
+        raise HTTPException(status_code=503, detail="Network not loaded")
+    
+    if timestamp:
+        state = app_state.get_state_at_timestamp(timestamp)
+    else:
+        state = app_state.current_state
+    
+    node_lookup = {}
+    for _, row in app_state.nodes_df.iterrows():
+        node_lookup[row["node_id"]] = (float(row["lon"]), float(row["lat"]))
+    
+    points = []
+    for _, row in app_state.network_df.iterrows():
+        seg_id = row["segment_id"]
+        src = row["source_node"]
+        tgt = row["target_node"]
+        
+        if src not in node_lookup or tgt not in node_lookup:
+            continue
+        
+        src_coords = node_lookup[src]
+        tgt_coords = node_lookup[tgt]
+        # Midpoint of segment
+        mid_lon = (src_coords[0] + tgt_coords[0]) / 2
+        mid_lat = (src_coords[1] + tgt_coords[1]) / 2
+        
+        s = state.get(seg_id, {})
+        cong = s.get("congestion_score", 0.0)
+        speed = s.get("speed_kmh", float(row["free_flow_speed_kmh"]))
+        flow = s.get("flow_vph", 0)
+        occ = s.get("occupancy_pct", 0)
+        
+        points.append({
+            "segment_id": seg_id,
+            "lon": round(mid_lon, 6),
+            "lat": round(mid_lat, 6),
+            "congestion_score": round(cong, 3),
+            "speed_kmh": round(speed, 1),
+            "flow_vph": round(flow, 0),
+            "occupancy_pct": round(occ, 1),
+            "road_class": row["road_class"],
+            "lanes": int(row["lanes"]),
+            # Segment line for drawing
+            "line": [[src_coords[0], src_coords[1]], [tgt_coords[0], tgt_coords[1]]],
+        })
+    
+    return {
+        "timestamp": timestamp or app_state.current_snapshot_ts or _now_str(),
+        "total_segments": len(points),
+        "points": points,
+    }
+
+
+# ──────────────────────────────────────────────
 # ALERTS
 # ──────────────────────────────────────────────
 

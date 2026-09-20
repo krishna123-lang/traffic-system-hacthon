@@ -37,6 +37,14 @@ interface CongestionSegmentOverlay {
   endFrac: number;
 }
 
+interface HeatmapSegment {
+  segment_id: string;
+  congestion_score: number;
+  line: [number, number][];
+  speed_kmh: number;
+  road_class: string;
+}
+
 interface Props {
   network?: NetworkData;
   onSegmentClick?: (segmentId: string) => void;
@@ -49,6 +57,7 @@ interface Props {
   targetNodeId?: string;
   isAnimating?: boolean;
   interventionOverlay?: InterventionOverlay | null;
+  heatmapData?: HeatmapSegment[];
 }
 
 export function NetworkMap({
@@ -63,6 +72,7 @@ export function NetworkMap({
   targetNodeId,
   isAnimating = false,
   interventionOverlay,
+  heatmapData,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
@@ -593,6 +603,108 @@ export function NetworkMap({
       map.once('load', drawOverlay);
     }
   }, [interventionOverlay, network]);
+
+  // ── Heatmap: city-wide congestion visualization ──
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+
+    const cleanup = () => {
+      if (map.getLayer('heatmap-glow')) map.removeLayer('heatmap-glow');
+      if (map.getLayer('heatmap-lines')) map.removeLayer('heatmap-lines');
+      if (map.getSource('heatmap-source')) map.removeSource('heatmap-source');
+    };
+
+    if (!heatmapData?.length) {
+      try { cleanup(); } catch {}
+      return;
+    }
+
+    const drawHeatmap = () => {
+      cleanup();
+
+      const features = heatmapData.map(seg => {
+        const score = seg.congestion_score;
+        // Color: green (0) -> yellow (0.15) -> orange (0.3) -> red (0.5+)
+        let color = '#22c55e'; // green
+        if (score > 0.5) color = '#ef4444';      // red
+        else if (score > 0.3) color = '#f97316';  // orange
+        else if (score > 0.15) color = '#eab308'; // yellow
+        else if (score > 0.05) color = '#84cc16'; // lime
+        
+        return {
+          type: 'Feature' as const,
+          properties: { 
+            segment_id: seg.segment_id, 
+            score, 
+            color,
+            speed: seg.speed_kmh,
+            road: seg.road_class,
+          },
+          geometry: {
+            type: 'LineString' as const,
+            coordinates: seg.line,
+          },
+        };
+      });
+
+      map.addSource('heatmap-source', {
+        type: 'geojson',
+        data: { type: 'FeatureCollection', features },
+      });
+
+      // Glow layer
+      map.addLayer({
+        id: 'heatmap-glow',
+        type: 'line',
+        source: 'heatmap-source',
+        paint: {
+          'line-color': ['get', 'color'],
+          'line-width': 8,
+          'line-opacity': 0.35,
+          'line-blur': 4,
+        },
+      });
+
+      // Main line
+      map.addLayer({
+        id: 'heatmap-lines',
+        type: 'line',
+        source: 'heatmap-source',
+        paint: {
+          'line-color': ['get', 'color'],
+          'line-width': 4,
+          'line-opacity': 0.85,
+        },
+      });
+
+      // Hover popup
+      map.on('mouseenter', 'heatmap-lines', () => { map.getCanvas().style.cursor = 'pointer'; });
+      map.on('mouseleave', 'heatmap-lines', () => { map.getCanvas().style.cursor = ''; });
+      map.on('click', 'heatmap-lines', (e) => {
+        const feat = e.features?.[0];
+        if (!feat) return;
+        const p = feat.properties;
+        new maplibregl.Popup({ closeButton: true, maxWidth: '200px' })
+          .setLngLat(e.lngLat)
+          .setHTML(`
+            <div style="font-family:system-ui;font-size:12px">
+              <b>${p?.segment_id}</b><br/>
+              Congestion: <b style="color:${p?.color}">${(p?.score * 100).toFixed(1)}%</b><br/>
+              Speed: ${p?.speed} km/h<br/>
+              Road: ${p?.road}
+            </div>
+          `)
+          .addTo(map);
+      });
+    };
+
+    if (map.isStyleLoaded()) {
+      drawHeatmap();
+    } else {
+      map.once('load', drawHeatmap);
+    }
+  }, [heatmapData]);
 
   return (
     <div className={`relative ${height} w-full`}>
