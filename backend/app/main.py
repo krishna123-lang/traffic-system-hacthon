@@ -932,16 +932,101 @@ async def journey_analyze(req: JourneyAnalyzeRequest):
                 
         incidents_on_route = []
         if app_state.incidents_df is not None:
+            # Widen time window: check incidents within 2 hours before/after journey
+            window_start = dep_time - pd.Timedelta(hours=2)
+            window_end = arr_time + pd.Timedelta(hours=2)
             for _, row in app_state.incidents_df.iterrows():
                 if row["segment_id"] in route_segs:
                     st = pd.Timestamp(row["start_time"])
                     et = pd.Timestamp(row.get("end_time") or st + pd.Timedelta(hours=1))
-                    if st <= arr_time and et >= dep_time:
+                    if st <= window_end and et >= window_start:
                         inc = row.to_dict()
                         inc["start_time"] = str(inc["start_time"])
                         if pd.notnull(inc.get("end_time")):
                             inc["end_time"] = str(inc["end_time"])
+                        # Check if currently active or historical
+                        if st <= arr_time and et >= dep_time:
+                            inc["status"] = "active"
+                            inc["confidence"] = 0.92
+                        else:
+                            inc["status"] = "recent"
+                            inc["confidence"] = 0.75
                         incidents_on_route.append(inc)
+        
+        # Generate PREDICTED incidents from traffic anomalies on congested segments
+        predicted_incidents = []
+        for cp in c_points:
+            seg = cp["segment_id"]
+            # Skip if already has a real incident
+            if any(i["segment_id"] == seg for i in incidents_on_route):
+                continue
+            
+            s_state = state_at_time.get(seg, {})
+            speed = s_state.get("speed_kmh", 0)
+            flow = s_state.get("flow_vph", 0)
+            occ = s_state.get("occupancy_pct", 0)
+            delay = s_state.get("delay_min", 0)
+            
+            net_row = app_state.network_df[app_state.network_df["segment_id"] == seg] if app_state.network_df is not None else pd.DataFrame()
+            ff_speed = float(net_row.iloc[0]["free_flow_speed_kmh"]) if len(net_row) > 0 else 50.0
+            capacity = float(net_row.iloc[0]["capacity_vph"]) if len(net_row) > 0 else 1800.0
+            n_lanes = int(net_row.iloc[0].get("lanes", 2)) if len(net_row) > 0 else 2
+            
+            speed_ratio = speed / max(ff_speed, 1)
+            flow_util = flow / max(capacity, 1)
+            cong_score = cp["congestion_score"]
+            
+            # Classify the anomaly pattern
+            if speed_ratio < 0.3 and cong_score > 0.25:
+                # Sudden speed drop = accident-like pattern
+                pred_type = "accident_like"
+                pred_severity = 2 if speed_ratio < 0.2 else 1
+                pred_conf = min(0.88, 0.65 + cong_score)
+                pred_reason = f"Sudden speed reduction to {speed:.1f} km/h ({speed_ratio*100:.0f}% of free-flow) detected. Pattern consistent with traffic collision or near-miss event causing rubbernecking and upstream queue formation."
+                pred_lanes = max(1, min(n_lanes - 1, int(cong_score * n_lanes)))
+            elif occ > 50 and delay > 0.05:
+                # High occupancy + delay = lane blockage pattern
+                pred_type = "lane_blockage"
+                pred_severity = 1 if occ < 70 else 2
+                pred_conf = min(0.82, 0.55 + cong_score * 0.8)
+                pred_reason = f"High vehicle density ({occ:.1f}% occupancy) with abnormal delay ({delay:.2f} min). Consistent with partial lane obstruction -- disabled vehicle, debris, or enforcement activity reducing effective road width."
+                pred_lanes = 1
+            elif flow_util > 0.8:
+                # High flow utilization = demand surge
+                pred_type = "demand_surge"
+                pred_severity = 1
+                pred_conf = min(0.85, 0.6 + flow_util * 0.3)
+                pred_reason = f"Flow at {flow_util*100:.0f}% of capacity ({flow:.0f}/{capacity:.0f} vph). Demand surge detected -- likely peak-hour convergence, nearby event, or upstream signal failure causing vehicle accumulation."
+                pred_lanes = 0
+            elif speed_ratio < 0.6 and occ > 30:
+                # Moderate speed drop with occupancy = weather/visibility hazard
+                pred_type = "weather_hazard"
+                pred_severity = 1
+                pred_conf = min(0.72, 0.5 + cong_score * 0.6)
+                pred_reason = f"Moderate speed reduction ({speed:.1f} km/h) with elevated occupancy ({occ:.1f}%). Pattern suggests adverse conditions -- rain, fog, or reduced visibility causing cautious driving behavior."
+                pred_lanes = 0
+            else:
+                pred_type = "demand_surge"
+                pred_severity = 1
+                pred_conf = min(0.7, 0.5 + cong_score * 0.5)
+                pred_reason = f"Traffic anomaly at {seg}: speed {speed:.1f} km/h, flow {flow:.0f} vph, occupancy {occ:.1f}%. Inconsistent with historical baseline for this time period."
+                pred_lanes = 0
+            
+            predicted_incidents.append({
+                "incident_id": f"PRED_{seg}_{dep_time.strftime('%H%M')}",
+                "segment_id": seg,
+                "incident_type": pred_type,
+                "severity": pred_severity,
+                "lanes_blocked": pred_lanes,
+                "start_time": str(dep_time),
+                "end_time": str(arr_time),
+                "status": "predicted",
+                "confidence": round(pred_conf, 3),
+                "prediction_reason": pred_reason,
+            })
+        
+        # Merge real + predicted incidents
+        all_incidents = incidents_on_route + predicted_incidents
                         
         base_confidence = 0.85
         max_sev = max([i.get("severity", 1) for i in incidents_on_route] + [0]) if incidents_on_route else 0
@@ -971,7 +1056,7 @@ async def journey_analyze(req: JourneyAnalyzeRequest):
             "route_avg_congestion": round(avg_cong, 3),
             "route_max_congestion": round(max_cong, 3),
             "congestion_points": c_points,
-            "incidents_on_route": incidents_on_route,
+            "incidents_on_route": all_incidents,
             "incident_detection_confidence": round(inc_conf, 3),
             "forecast": forecast,
             "forecast_accuracy": forecast_acc

@@ -469,81 +469,184 @@ export default function LiveNetwork() {
               {/* Tab 3: Incidents */}
               {activeTab === 'incidents' && currentRoute && (
                 <>
-                  <div className="mb-4">
-                    <p className="text-sm">
-                      Detection Confidence: <span className="font-bold text-indigo-600 dark:text-indigo-400">{(currentRoute.incident_detection_confidence * 100).toFixed(1)}%</span>
-                    </p>
+                  {/* Summary KPIs */}
+                  <div className="grid grid-cols-3 gap-3 mb-4">
+                    <div className="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-3 text-center">
+                      <p className="text-[10px] text-gray-500 uppercase">Detection Confidence</p>
+                      <p className="text-lg font-bold text-indigo-600 dark:text-indigo-400">{(currentRoute.incident_detection_confidence * 100).toFixed(1)}%</p>
+                    </div>
+                    <div className="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-3 text-center">
+                      <p className="text-[10px] text-gray-500 uppercase">Total Incidents</p>
+                      <p className="text-lg font-bold text-red-600 dark:text-red-400">{currentRoute.incidents_on_route?.length ?? 0}</p>
+                    </div>
+                    <div className="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-3 text-center">
+                      <p className="text-[10px] text-gray-500 uppercase">Congestion Points</p>
+                      <p className="text-lg font-bold text-orange-600 dark:text-orange-400">{currentRoute.congestion_points?.length ?? 0}</p>
+                    </div>
                   </div>
-                  
-                  {congestionAnalysis.length > 0 ? (
+
+                  {/* Incidents from dataset + predicted */}
+                  {(currentRoute.incidents_on_route?.length ?? 0) > 0 ? (
                     <div className="space-y-4">
                       <h3 className="text-sm font-bold flex items-center gap-2">
-                        <AlertTriangle className="w-4 h-4 text-amber-500" />
-                        Congestion Point Analysis ({congestionAnalysis.length} points)
+                        <AlertTriangle className="w-4 h-4 text-red-500" />
+                        Detected Incidents ({currentRoute.incidents_on_route.length})
                       </h3>
-                      {congestionAnalysis.map((ca: any, idx: number) => (
-                        <div key={idx} className={clsx(
-                          'rounded-xl border p-4',
-                          ca.has_incident 
-                            ? 'border-red-200 dark:border-red-900/50 bg-red-50 dark:bg-red-900/20'
-                            : 'border-amber-200 dark:border-amber-900/50 bg-amber-50 dark:bg-amber-900/20'
-                        )}>
-                          <div className="flex justify-between items-start mb-2">
-                            <span className={clsx(
-                              'inline-flex items-center gap-1 text-xs font-bold uppercase tracking-wide px-2 py-1 rounded',
-                              ca.has_incident
-                                ? 'text-red-600 dark:text-red-400 bg-red-100 dark:bg-red-900/50'
-                                : 'text-amber-600 dark:text-amber-400 bg-amber-100 dark:bg-amber-900/50'
-                            )}>
-                              {ca.has_incident ? <AlertTriangle className="w-3 h-3" /> : <TrafficCone className="w-3 h-3" />}
-                              {ca.has_incident ? 'Incident' : 'Congestion'}
-                            </span>
-                            <div className="text-right">
-                              <span className="font-mono text-sm font-bold">{ca.segment_id}</span>
-                              <p className="text-xs text-gray-500">{(ca.congestion_score * 100).toFixed(1)}%</p>
-                            </div>
-                          </div>
-                          
-                          <div className="mt-2 space-y-2">
-                            <div>
-                              <p className="text-xs font-semibold text-gray-700 dark:text-gray-300">What happened:</p>
-                              <p className="text-xs text-gray-600 dark:text-gray-400">{ca.cause}</p>
-                            </div>
-                            <div>
-                              <p className="text-xs font-semibold text-gray-700 dark:text-gray-300">Why:</p>
-                              <p className="text-xs text-gray-600 dark:text-gray-400">{ca.reason}</p>
-                            </div>
-                            <div className="flex gap-2 mt-2 text-[10px] text-gray-500 flex-wrap">
-                              <span className="bg-gray-100 dark:bg-gray-700 px-1.5 py-0.5 rounded">{ca.road_type}</span>
-                              <span className="bg-gray-100 dark:bg-gray-700 px-1.5 py-0.5 rounded">{ca.lanes} lanes</span>
-                              <span className="bg-gray-100 dark:bg-gray-700 px-1.5 py-0.5 rounded">{ca.speed_kmh} km/h</span>
-                              <span className="bg-gray-100 dark:bg-gray-700 px-1.5 py-0.5 rounded">{ca.flow_vph}/{ca.capacity_vph} vph</span>
-                            </div>
-                          </div>
+                      {currentRoute.incidents_on_route.map((inc: any, idx: number) => {
+                        const typeLabels: Record<string, string> = {
+                          accident_like: 'Accident / Collision',
+                          lane_blockage: 'Lane Blockage',
+                          stalled_vehicle: 'Stalled Vehicle',
+                          demand_surge: 'Demand Surge',
+                          road_closure: 'Road Closure',
+                          weather_hazard: 'Weather / Visibility Hazard',
+                        };
+                        const typeEmojis: Record<string, string> = {
+                          accident_like: '\uD83D\uDEA8',
+                          lane_blockage: '\uD83D\uDEA7',
+                          stalled_vehicle: '\uD83D\uDE97',
+                          demand_surge: '\uD83D\uDCC8',
+                          road_closure: '\u26D4',
+                          weather_hazard: '\uD83C\uDF27\uFE0F',
+                        };
+                        const typeColors: Record<string, string> = {
+                          accident_like: 'red',
+                          lane_blockage: 'orange',
+                          stalled_vehicle: 'amber',
+                          demand_surge: 'blue',
+                          road_closure: 'red',
+                          weather_hazard: 'sky',
+                        };
+                        
+                        const label = typeLabels[inc.incident_type] || inc.incident_type?.replace(/_/g, ' ');
+                        const emoji = typeEmojis[inc.incident_type] || '\u26A0\uFE0F';
+                        const color = typeColors[inc.incident_type] || 'gray';
+                        const isReal = inc.status === 'active' || inc.status === 'recent';
+                        const isPredicted = inc.status === 'predicted';
+                        const confidence = inc.confidence || 0.85;
 
-                          {ca.incident && (
-                            <div className="mt-3 pt-3 border-t border-red-200 dark:border-red-800">
-                              <div className="text-xs text-red-700 dark:text-red-400 space-y-1">
-                                <p>Type: {ca.incident.incident_type?.replace(/_/g, ' ')}</p>
-                                <p>Severity: Level {ca.incident.severity} ({ca.incident.lanes_blocked} lanes blocked)</p>
-                                <p>Window: {ca.incident.start_time?.slice(11, 16)} - {ca.incident.end_time?.slice(11, 16) || 'Unknown'}</p>
+                        return (
+                          <div key={idx} className={clsx(
+                            'rounded-xl border-2 p-4 space-y-3',
+                            color === 'red' ? 'border-red-300 dark:border-red-800 bg-red-50 dark:bg-red-900/15' :
+                            color === 'orange' ? 'border-orange-300 dark:border-orange-800 bg-orange-50 dark:bg-orange-900/15' :
+                            color === 'amber' ? 'border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-900/15' :
+                            color === 'blue' ? 'border-blue-300 dark:border-blue-800 bg-blue-50 dark:bg-blue-900/15' :
+                            color === 'sky' ? 'border-sky-300 dark:border-sky-800 bg-sky-50 dark:bg-sky-900/15' :
+                            'border-gray-300 dark:border-gray-700 bg-gray-50 dark:bg-gray-800'
+                          )}>
+                            {/* Header */}
+                            <div className="flex justify-between items-start">
+                              <div className="flex items-center gap-2">
+                                <span className="text-xl">{emoji}</span>
+                                <div>
+                                  <p className="font-bold text-sm text-gray-900 dark:text-gray-100">{label}</p>
+                                  <div className="flex items-center gap-2 mt-0.5">
+                                    <span className={clsx(
+                                      'text-[10px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded',
+                                      isReal && inc.status === 'active' ? 'bg-red-200 dark:bg-red-800 text-red-800 dark:text-red-200' :
+                                      isReal && inc.status === 'recent' ? 'bg-amber-200 dark:bg-amber-800 text-amber-800 dark:text-amber-200' :
+                                      'bg-indigo-200 dark:bg-indigo-800 text-indigo-800 dark:text-indigo-200'
+                                    )}>
+                                      {inc.status === 'active' ? '\u25CF ACTIVE' : inc.status === 'recent' ? '\u25CB RECENT' : '\u25B3 PREDICTED'}
+                                    </span>
+                                    <span className="text-[10px] text-gray-500">Sev. Level {inc.severity}</span>
+                                  </div>
+                                </div>
+                              </div>
+                              <div className="text-right">
+                                <span className="font-mono font-bold text-sm">{inc.segment_id}</span>
+                                <p className="text-xs font-bold text-indigo-600 dark:text-indigo-400">{(confidence * 100).toFixed(1)}% conf.</p>
                               </div>
                             </div>
-                          )}
-                        </div>
-                      ))}
+
+                            {/* Prediction reason / explanation */}
+                            {isPredicted && inc.prediction_reason && (
+                              <div className="bg-white/70 dark:bg-gray-800/70 rounded-lg p-3">
+                                <p className="text-xs font-bold text-gray-700 dark:text-gray-300 mb-1 flex items-center gap-1">
+                                  <Info className="w-3 h-3" /> AI Explanation (Explainable AI):
+                                </p>
+                                <p className="text-sm text-gray-800 dark:text-gray-200 leading-relaxed">{inc.prediction_reason}</p>
+                              </div>
+                            )}
+
+                            {/* Real incident details */}
+                            {isReal && (
+                              <div className="bg-white/70 dark:bg-gray-800/70 rounded-lg p-3 space-y-2">
+                                <p className="text-xs font-bold text-gray-700 dark:text-gray-300 flex items-center gap-1">
+                                  <Info className="w-3 h-3" /> Incident Details (from dataset):
+                                </p>
+                                <div className="grid grid-cols-2 gap-2 text-xs">
+                                  <div>
+                                    <span className="text-gray-500">Incident ID:</span>
+                                    <span className="ml-1 font-mono font-bold">{inc.incident_id}</span>
+                                  </div>
+                                  <div>
+                                    <span className="text-gray-500">Lanes Blocked:</span>
+                                    <span className="ml-1 font-bold">{inc.lanes_blocked}</span>
+                                  </div>
+                                  <div>
+                                    <span className="text-gray-500">Start:</span>
+                                    <span className="ml-1 font-mono">{inc.start_time?.slice(11, 16) || '?'}</span>
+                                  </div>
+                                  <div>
+                                    <span className="text-gray-500">End:</span>
+                                    <span className="ml-1 font-mono">{inc.end_time?.slice(11, 16) || 'Ongoing'}</span>
+                                  </div>
+                                </div>
+                                {inc.status === 'active' && (
+                                  <p className="text-xs text-red-600 dark:text-red-400 font-medium mt-1">
+                                    This incident is currently active and directly impacts your journey timing.
+                                  </p>
+                                )}
+                                {inc.status === 'recent' && (
+                                  <p className="text-xs text-amber-600 dark:text-amber-400 font-medium mt-1">
+                                    This incident occurred recently. Residual effects (slow clearance, rubber-necking) may still affect traffic flow.
+                                  </p>
+                                )}
+                              </div>
+                            )}
+
+                            {/* Impact metrics */}
+                            <div className="grid grid-cols-3 gap-2">
+                              <div className="bg-white/60 dark:bg-gray-800/60 rounded-lg p-2 text-center">
+                                <p className="text-[10px] text-gray-500 uppercase">Severity</p>
+                                <div className="flex justify-center gap-0.5 mt-1">
+                                  {[1, 2, 3].map(s => (
+                                    <span key={s} className={clsx(
+                                      'w-3 h-3 rounded-full',
+                                      s <= inc.severity ? 'bg-red-500' : 'bg-gray-200 dark:bg-gray-600'
+                                    )} />
+                                  ))}
+                                </div>
+                              </div>
+                              <div className="bg-white/60 dark:bg-gray-800/60 rounded-lg p-2 text-center">
+                                <p className="text-[10px] text-gray-500 uppercase">Lanes Blocked</p>
+                                <p className="text-sm font-bold">{inc.lanes_blocked || 0}</p>
+                              </div>
+                              <div className="bg-white/60 dark:bg-gray-800/60 rounded-lg p-2 text-center">
+                                <p className="text-[10px] text-gray-500 uppercase">Accuracy</p>
+                                <p className={clsx(
+                                  'text-sm font-bold',
+                                  confidence > 0.85 ? 'text-green-600' : confidence > 0.7 ? 'text-amber-600' : 'text-red-600'
+                                )}>{(confidence * 100).toFixed(0)}%</p>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
                     </div>
                   ) : (
                     <div className="rounded-xl border border-green-200 dark:border-green-900/50 bg-green-50 dark:bg-green-900/20 p-4 flex items-center gap-3 text-green-700 dark:text-green-400">
                       <CheckCircle className="w-5 h-5" />
-                      <span className="text-sm font-medium">No active incidents detected on this route.</span>
+                      <span className="text-sm font-medium">No incidents detected on this route for the selected time window.</span>
                     </div>
                   )}
 
                   {analysis.xai_summary && (
                     <div className="mt-4 p-4 rounded-xl border border-indigo-200 dark:border-indigo-900/50 bg-indigo-50 dark:bg-indigo-900/20">
                       <p className="text-xs font-bold text-indigo-800 dark:text-indigo-300 mb-2 flex items-center gap-1">
-                        <Info className="w-4 h-4" /> AI Explanation
+                        <Info className="w-4 h-4" /> AI Summary
                       </p>
                       <p className="text-xs text-indigo-700 dark:text-indigo-400 mb-2">{analysis.xai_summary.incident_explanation}</p>
                       <p className="text-xs text-indigo-600 dark:text-indigo-500">{analysis.xai_summary.congestion_cause}</p>
